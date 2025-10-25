@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { chatModels } from "@/lib/ai/models";
 
 const textPartSchema = z.object({
   type: z.enum(["text"]),
@@ -14,6 +15,9 @@ const filePartSchema = z.object({
 
 const partSchema = z.union([textPartSchema, filePartSchema]);
 
+// Create enum of all available model IDs dynamically
+const modelIds = chatModels.map((model) => model.id) as [string, ...string[]];
+
 export const postRequestBodySchema = z.object({
   id: z.string().uuid(),
   message: z.object({
@@ -21,8 +25,10 @@ export const postRequestBodySchema = z.object({
     role: z.enum(["user"]),
     parts: z.array(partSchema),
   }),
-  selectedChatModel: z.enum(["chat-model", "chat-model-reasoning"]),
+  selectedChatModel: z.enum(modelIds),
   selectedVisibilityType: z.enum(["public", "private"]),
+  apiKey: z.string().min(1), // User-provided API key for the selected model's provider
+  githubToken: z.string().optional(), // Optional GitHub Personal Access Token for MCP integration
 });
 
 export type PostRequestBody = z.infer<typeof postRequestBodySchema>;

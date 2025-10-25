@@ -16,17 +16,18 @@ import {
 import type { ModelCatalog } from "tokenlens/core";
 import { fetchModels } from "tokenlens/fetch";
 import { getUsage } from "tokenlens/helpers";
-import { auth, type UserType } from "@/app/(auth)/auth";
+import { createClient } from "@/lib/supabase/server";
 import type { VisibilityType } from "@/components/visibility-selector";
-import { entitlementsByUserType } from "@/lib/ai/entitlements";
-import type { ChatModel } from "@/lib/ai/models";
+import { defaultEntitlements } from "@/lib/ai/entitlements";
+import { getModelById, type ChatModel } from "@/lib/ai/models";
 import { type RequestHints, systemPrompt } from "@/lib/ai/prompts";
-import { myProvider } from "@/lib/ai/providers";
+import { getLanguageModel, myProvider } from "@/lib/ai/providers";
 import { createDocument } from "@/lib/ai/tools/create-document";
+import { createGitHubTools } from "@/lib/ai/tools/github-tools";
 import { getWeather } from "@/lib/ai/tools/get-weather";
 import { requestSuggestions } from "@/lib/ai/tools/request-suggestions";
 import { updateDocument } from "@/lib/ai/tools/update-document";
-import { isProductionEnvironment } from "@/lib/constants";
+import { isProductionEnvironment, isTestEnvironment } from "@/lib/constants";
 import {
   createStreamId,
   deleteChatById,
@@ -85,12 +86,22 @@ export function getStreamContext() {
 }
 
 export async function POST(request: Request) {
+  console.log("[Chat API] ========== NEW CHAT REQUEST ==========");
   let requestBody: PostRequestBody;
 
   try {
     const json = await request.json();
+    console.log("[Chat API] Request body received:", {
+      hasId: !!json.id,
+      hasMessage: !!json.message,
+      selectedChatModel: json.selectedChatModel,
+      hasApiKey: !!json.apiKey,
+      hasGithubToken: !!json.githubToken,
+    });
     requestBody = postRequestBodySchema.parse(json);
-  } catch (_) {
+    console.log("[Chat API] ✅ Request body validation passed");
+  } catch (error) {
+    console.error("[Chat API] ❌ Request validation failed:", error);
     return new ChatSDKError("bad_request:api").toResponse();
   }
 
@@ -100,51 +111,96 @@ export async function POST(request: Request) {
       message,
       selectedChatModel,
       selectedVisibilityType,
+      apiKey,
+      githubToken,
     }: {
       id: string;
       message: ChatMessage;
       selectedChatModel: ChatModel["id"];
       selectedVisibilityType: VisibilityType;
+      apiKey: string;
+      githubToken?: string;
     } = requestBody;
 
-    const session = await auth();
-
-    if (!session?.user) {
-      return new ChatSDKError("unauthorized:chat").toResponse();
-    }
-
-    const userType: UserType = session.user.type;
-
-    const messageCount = await getMessageCountByUserId({
-      id: session.user.id,
-      differenceInHours: 24,
+    console.log("[Chat API] Processing chat:", {
+      chatId: id,
+      model: selectedChatModel,
+      messageId: message.id,
+      visibility: selectedVisibilityType,
     });
 
-    if (messageCount > entitlementsByUserType[userType].maxMessagesPerDay) {
+    // Get model configuration
+    const modelConfig = getModelById(selectedChatModel);
+    if (!modelConfig) {
+      console.error("[Chat API] ❌ Invalid model:", selectedChatModel);
+      return new ChatSDKError(
+        "bad_request:api",
+        "Invalid model selected"
+      ).toResponse();
+    }
+    console.log("[Chat API] ✅ Model config loaded:", {
+      provider: modelConfig.provider,
+      modelId: modelConfig.modelId,
+      supportsTools: modelConfig.supportsTools,
+    });
+
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+
+    if (!user) {
+      console.error("[Chat API] ❌ No authenticated user found");
+      return new ChatSDKError("unauthorized:chat").toResponse();
+    }
+    console.log("[Chat API] ✅ User authenticated:", {
+      userId: user.id,
+      email: user.email,
+    });
+
+    const messageCount = await getMessageCountByUserId({
+      id: user.id,
+      differenceInHours: 24,
+    });
+    console.log("[Chat API] Message count (24h):", messageCount);
+
+    // Check rate limit (for self-hosted with API keys, we allow unlimited, but keeping the check for future use)
+    if (defaultEntitlements.maxMessagesPerDay > 0 && messageCount > defaultEntitlements.maxMessagesPerDay) {
       return new ChatSDKError("rate_limit:chat").toResponse();
     }
 
     const chat = await getChatById({ id });
+    console.log("[Chat API] Chat lookup:", chat ? "exists" : "new chat");
 
     if (chat) {
-      if (chat.userId !== session.user.id) {
+      if (chat.userId !== user.id) {
+        console.error("[Chat API] ❌ Forbidden: User doesn't own this chat");
         return new ChatSDKError("forbidden:chat").toResponse();
       }
+      console.log("[Chat API] ✅ Using existing chat");
     } else {
+      console.log("[Chat API] Creating new chat...");
       const title = await generateTitleFromUserMessage({
         message,
       });
+      console.log("[Chat API] Generated title:", title);
 
-      await saveChat({
-        id,
-        userId: session.user.id,
-        title,
-        visibility: selectedVisibilityType,
-      });
+      try {
+        await saveChat({
+          id,
+          userId: user.id,
+          title,
+          visibility: selectedVisibilityType,
+        });
+        console.log("[Chat API] ✅ Chat saved to database");
+      } catch (error) {
+        console.error("[Chat API] ❌ Failed to save chat:", error);
+        throw error;
+      }
     }
 
     const messagesFromDb = await getMessagesByChatId({ id });
+    console.log("[Chat API] Messages from DB:", messagesFromDb.length);
     const uiMessages = [...convertToUIMessages(messagesFromDb), message];
+    console.log("[Chat API] Total messages for context:", uiMessages.length);
 
     const { longitude, latitude, city, country } = geolocation(request);
 
@@ -155,59 +211,115 @@ export async function POST(request: Request) {
       country,
     };
 
-    await saveMessages({
-      messages: [
-        {
-          chatId: id,
-          id: message.id,
-          role: "user",
-          parts: message.parts,
-          attachments: [],
-          createdAt: new Date(),
-        },
-      ],
-    });
+    console.log("[Chat API] Saving user message to DB...");
+    try {
+      await saveMessages({
+        messages: [
+          {
+            chatId: id,
+            id: message.id,
+            role: "user",
+            parts: message.parts,
+            attachments: [],
+            createdAt: new Date(),
+          },
+        ],
+      });
+      console.log("[Chat API] ✅ User message saved");
+    } catch (error) {
+      console.error("[Chat API] ❌ Failed to save message:", error);
+      throw error;
+    }
 
     const streamId = generateUUID();
     await createStreamId({ streamId, chatId: id });
+    console.log("[Chat API] Stream ID created:", streamId);
 
     let finalMergedUsage: AppUsage | undefined;
 
+    console.log("[Chat API] Creating UI message stream...");
     const stream = createUIMessageStream({
-      execute: ({ writer: dataStream }) => {
+      execute: async ({ writer: dataStream }) => {
+        console.log("[Chat API] Stream execute started");
+        // Get the appropriate model instance
+        console.log("[Chat API] Initializing language model...", {
+          isTest: isTestEnvironment,
+          provider: modelConfig.provider,
+          modelId: modelConfig.modelId,
+        });
+
+        const model = isTestEnvironment
+          ? myProvider?.languageModel(selectedChatModel)
+          : getLanguageModel(
+              modelConfig.provider,
+              modelConfig.modelId,
+              apiKey
+            );
+
+        if (!model) {
+          console.error("[Chat API] ❌ Failed to initialize language model");
+          throw new Error("Failed to initialize language model");
+        }
+        console.log("[Chat API] ✅ Language model initialized");
+
+        // Initialize base tools
+        const baseTools: Record<string, any> = {
+          getWeather,
+          createDocument: createDocument({ user, dataStream }),
+          updateDocument: updateDocument({ user, dataStream }),
+          requestSuggestions: requestSuggestions({
+            user,
+            dataStream,
+          }),
+        };
+
+        const baseToolNames = Object.keys(baseTools);
+
+        // Load GitHub tools if token is provided
+        let githubTools: Record<string, any> = {};
+        let githubToolNames: string[] = [];
+
+        if (githubToken && modelConfig.supportsTools !== false) {
+          try {
+            console.log("[Chat API] Loading GitHub MCP tools...");
+            githubTools = await createGitHubTools(githubToken);
+            githubToolNames = Object.keys(githubTools);
+            console.log(`[Chat API] Loaded ${githubToolNames.length} GitHub tools`);
+          } catch (error) {
+            console.error("[Chat API] Failed to load GitHub tools:", error);
+            // Continue without GitHub tools if initialization fails
+          }
+        }
+
+        // Merge tools
+        const allTools = { ...baseTools, ...githubTools };
+        const activeToolNames = modelConfig.supportsTools !== false
+          ? [...baseToolNames, ...githubToolNames]
+          : [];
+
+        console.log("[Chat API] Starting streamText with:", {
+          toolCount: Object.keys(allTools).length,
+          activeToolsCount: activeToolNames.length,
+          messageCount: uiMessages.length,
+        });
+
         const result = streamText({
-          model: myProvider.languageModel(selectedChatModel),
+          model,
           system: systemPrompt({ selectedChatModel, requestHints }),
           messages: convertToModelMessages(uiMessages),
           stopWhen: stepCountIs(5),
-          experimental_activeTools:
-            selectedChatModel === "chat-model-reasoning"
-              ? []
-              : [
-                  "getWeather",
-                  "createDocument",
-                  "updateDocument",
-                  "requestSuggestions",
-                ],
+          experimental_activeTools: activeToolNames,
           experimental_transform: smoothStream({ chunking: "word" }),
-          tools: {
-            getWeather,
-            createDocument: createDocument({ session, dataStream }),
-            updateDocument: updateDocument({ session, dataStream }),
-            requestSuggestions: requestSuggestions({
-              session,
-              dataStream,
-            }),
-          },
+          tools: allTools,
           experimental_telemetry: {
             isEnabled: isProductionEnvironment,
             functionId: "stream-text",
           },
           onFinish: async ({ usage }) => {
+            console.log("[Chat API] Stream finished, processing usage...");
             try {
               const providers = await getTokenlensCatalog();
-              const modelId =
-                myProvider.languageModel(selectedChatModel).modelId;
+              const modelId = modelConfig.modelId;
               if (!modelId) {
                 finalMergedUsage = usage;
                 dataStream.write({
@@ -315,15 +427,16 @@ export async function DELETE(request: Request) {
     return new ChatSDKError("bad_request:api").toResponse();
   }
 
-  const session = await auth();
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
 
-  if (!session?.user) {
+  if (!user) {
     return new ChatSDKError("unauthorized:chat").toResponse();
   }
 
   const chat = await getChatById({ id });
 
-  if (chat?.userId !== session.user.id) {
+  if (chat?.userId !== user.id) {
     return new ChatSDKError("forbidden:chat").toResponse();
   }
 

@@ -1,16 +1,17 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { Chat } from "@/components/chat";
+import { ChatWithOnboarding } from "@/components/chat-with-onboarding";
 import { DataStreamHandler } from "@/components/data-stream-handler";
 import { DEFAULT_CHAT_MODEL } from "@/lib/ai/models";
+import { createClient } from "@/lib/supabase/server";
 import { generateUUID } from "@/lib/utils";
-import { auth } from "../(auth)/auth";
 
 export default async function Page() {
-  const session = await auth();
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
 
-  if (!session) {
-    redirect("/api/auth/guest");
+  if (!user) {
+    redirect("/login");
   }
 
   const id = generateUUID();
@@ -21,7 +22,7 @@ export default async function Page() {
   if (!modelIdFromCookie) {
     return (
       <>
-        <Chat
+        <ChatWithOnboarding
           autoResume={false}
           id={id}
           initialChatModel={DEFAULT_CHAT_MODEL}
@@ -37,7 +38,7 @@ export default async function Page() {
 
   return (
     <>
-      <Chat
+      <ChatWithOnboarding
         autoResume={false}
         id={id}
         initialChatModel={modelIdFromCookie.value}

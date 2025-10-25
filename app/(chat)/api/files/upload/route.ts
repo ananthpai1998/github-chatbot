@@ -1,8 +1,7 @@
-import { put } from "@vercel/blob";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
-import { auth } from "@/app/(auth)/auth";
+import { createClient } from "@/lib/supabase/server";
 
 // Use Blob instead of File since File is not available in Node.js environment
 const FileSchema = z.object({
@@ -18,9 +17,10 @@ const FileSchema = z.object({
 });
 
 export async function POST(request: Request) {
-  const session = await auth();
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
 
-  if (!session) {
+  if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -51,11 +51,28 @@ export async function POST(request: Request) {
     const fileBuffer = await file.arrayBuffer();
 
     try {
-      const data = await put(`${filename}`, fileBuffer, {
-        access: "public",
-      });
+      // Upload to Supabase Storage
+      const { data, error } = await supabase.storage
+        .from("chat-attachments")
+        .upload(`${user.id}/${Date.now()}-${filename}`, fileBuffer, {
+          contentType: file.type,
+          upsert: false,
+        });
 
-      return NextResponse.json(data);
+      if (error) {
+        console.error("Supabase Storage error:", error);
+        return NextResponse.json({ error: "Upload failed" }, { status: 500 });
+      }
+
+      // Get public URL
+      const { data: publicUrlData } = supabase.storage
+        .from("chat-attachments")
+        .getPublicUrl(data.path);
+
+      return NextResponse.json({
+        url: publicUrlData.publicUrl,
+        pathname: data.path,
+      });
     } catch (_error) {
       return NextResponse.json({ error: "Upload failed" }, { status: 500 });
     }

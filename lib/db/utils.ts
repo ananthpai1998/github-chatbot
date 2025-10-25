@@ -1,16 +1,17 @@
 import { generateId } from "ai";
-import { genSaltSync, hashSync } from "bcrypt-ts";
+
+// Note: Password hashing is now handled by Supabase Auth
+// These functions are kept for backward compatibility but are no longer used
 
 export function generateHashedPassword(password: string) {
-  const salt = genSaltSync(10);
-  const hash = hashSync(password, salt);
-
-  return hash;
+  // Supabase handles password hashing internally
+  // This function is deprecated and should not be used
+  return password;
 }
 
 export function generateDummyPassword() {
+  // Generate a random ID for dummy password
+  // In Supabase context, this is not needed as auth is managed externally
   const password = generateId();
-  const hashedPassword = generateHashedPassword(password);
-
-  return hashedPassword;
+  return password;
 }

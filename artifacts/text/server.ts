@@ -6,6 +6,10 @@ import { createDocumentHandler } from "@/lib/artifacts/server";
 export const textDocumentHandler = createDocumentHandler<"text">({
   kind: "text",
   onCreateDocument: async ({ title, dataStream }) => {
+    if (!myProvider) {
+      throw new Error("Artifact generation is not available in production mode without a configured provider");
+    }
+
     let draftContent = "";
 
     const { fullStream } = streamText({
@@ -35,6 +39,10 @@ export const textDocumentHandler = createDocumentHandler<"text">({
     return draftContent;
   },
   onUpdateDocument: async ({ document, description, dataStream }) => {
+    if (!myProvider) {
+      throw new Error("Artifact generation is not available in production mode without a configured provider");
+    }
+
     let draftContent = "";
 
     const { fullStream } = streamText({

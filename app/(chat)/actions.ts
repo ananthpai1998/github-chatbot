@@ -3,7 +3,7 @@
 import { generateText, type UIMessage } from "ai";
 import { cookies } from "next/headers";
 import type { VisibilityType } from "@/components/visibility-selector";
-import { myProvider } from "@/lib/ai/providers";
+import { createProviderInstance } from "@/lib/ai/providers";
 import {
   deleteMessagesByChatIdAfterTimestamp,
   getMessageById,
@@ -20,17 +20,28 @@ export async function generateTitleFromUserMessage({
 }: {
   message: UIMessage;
 }) {
-  const { text: title } = await generateText({
-    model: myProvider.languageModel("title-model"),
-    system: `\n
-    - you will generate a short title based on the first message a user begins a conversation with
-    - ensure it is not more than 80 characters long
-    - the title should be a summary of the user's message
-    - do not use quotes or colons`,
-    prompt: JSON.stringify(message),
-  });
+  // Use a simple prompt-based title generation
+  // Extract first text content from the message
+  let messageText = "";
 
-  return title;
+  if ("content" in message && typeof message.content === "string") {
+    messageText = message.content;
+  } else if ("parts" in message && Array.isArray(message.parts)) {
+    const textPart = message.parts.find((part: any) => part.type === "text") as any;
+    if (textPart && "text" in textPart) {
+      messageText = textPart.text;
+    }
+  }
+
+  // Generate a simple title from the first few words
+  if (!messageText) {
+    return "New Chat";
+  }
+
+  const words = messageText.split(" ").slice(0, 10).join(" ");
+  const title = words.length > 50 ? words.substring(0, 50) + "..." : words;
+
+  return title || "New Chat";
 }
 
 export async function deleteTrailingMessages({ id }: { id: string }) {

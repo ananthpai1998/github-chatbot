@@ -21,7 +21,6 @@ import { useLocalStorage, useWindowSize } from "usehooks-ts";
 import { saveChatModelAsCookie } from "@/app/(chat)/actions";
 import { SelectItem } from "@/components/ui/select";
 import { chatModels } from "@/lib/ai/models";
-import { myProvider } from "@/lib/ai/providers";
 import type { Attachment, ChatMessage } from "@/lib/types";
 import type { AppUsage } from "@/lib/usage";
 import { cn } from "@/lib/utils";
@@ -63,6 +62,7 @@ function PureMultimodalInput({
   selectedModelId,
   onModelChange,
   usage,
+  isDisabled = false,
 }: {
   chatId: string;
   input: string;
@@ -79,6 +79,7 @@ function PureMultimodalInput({
   selectedModelId: string;
   onModelChange?: (modelId: string) => void;
   usage?: AppUsage;
+  isDisabled?: boolean;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { width } = useWindowSize();
@@ -195,10 +196,6 @@ function PureMultimodalInput({
     }
   }, []);
 
-  const _modelResolver = useMemo(() => {
-    return myProvider.languageModel(selectedModelId);
-  }, [selectedModelId]);
-
   const contextProps = useMemo(
     () => ({
       usage,
@@ -300,16 +297,17 @@ function PureMultimodalInput({
         <div className="flex flex-row items-start gap-1 sm:gap-2">
           <PromptInputTextarea
             autoFocus
-            className="grow resize-none border-0! border-none! bg-transparent p-2 text-sm outline-none ring-0 [-ms-overflow-style:none] [scrollbar-width:none] placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-0 focus-visible:ring-offset-0 [&::-webkit-scrollbar]:hidden"
+            className="grow resize-none border-0! border-none! bg-transparent p-2 text-sm outline-none ring-0 [-ms-overflow-style:none] [scrollbar-width:none] placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-0 focus-visible:ring-offset-0 [&::-webkit-scrollbar]:hidden disabled:cursor-not-allowed disabled:opacity-50"
             data-testid="multimodal-input"
             disableAutoResize={true}
             maxHeight={200}
             minHeight={44}
             onChange={handleInput}
-            placeholder="Send a message..."
+            placeholder={isDisabled ? "Add API key to chat..." : "Send a message..."}
             ref={textareaRef}
             rows={1}
             value={input}
+            disabled={isDisabled}
           />{" "}
           <Context {...contextProps} />
         </div>
@@ -319,6 +317,7 @@ function PureMultimodalInput({
               fileInputRef={fileInputRef}
               selectedModelId={selectedModelId}
               status={status}
+              isDisabled={isDisabled}
             />
             <ModelSelectorCompact
               onModelChange={onModelChange}
@@ -331,7 +330,7 @@ function PureMultimodalInput({
           ) : (
             <PromptInputSubmit
               className="size-8 rounded-full bg-primary text-primary-foreground transition-colors duration-200 hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground"
-              disabled={!input.trim() || uploadQueue.length > 0}
+              disabled={!input.trim() || uploadQueue.length > 0 || isDisabled}
               status={status}
             >
               <ArrowUpIcon size={14} />
@@ -361,6 +360,9 @@ export const MultimodalInput = memo(
     if (prevProps.selectedModelId !== nextProps.selectedModelId) {
       return false;
     }
+    if (prevProps.isDisabled !== nextProps.isDisabled) {
+      return false;
+    }
 
     return true;
   }
@@ -370,10 +372,12 @@ function PureAttachmentsButton({
   fileInputRef,
   status,
   selectedModelId,
+  isDisabled = false,
 }: {
   fileInputRef: React.MutableRefObject<HTMLInputElement | null>;
   status: UseChatHelpers<ChatMessage>["status"];
   selectedModelId: string;
+  isDisabled?: boolean;
 }) {
   const isReasoningModel = selectedModelId === "chat-model-reasoning";
 
@@ -381,7 +385,7 @@ function PureAttachmentsButton({
     <Button
       className="aspect-square h-8 rounded-lg p-1 transition-colors hover:bg-accent"
       data-testid="attachments-button"
-      disabled={status !== "ready" || isReasoningModel}
+      disabled={status !== "ready" || isReasoningModel || isDisabled}
       onClick={(event) => {
         event.preventDefault();
         fileInputRef.current?.click();

@@ -1,5 +1,5 @@
 import { streamObject, tool, type UIMessageStreamWriter } from "ai";
-import type { Session } from "next-auth";
+import type { User } from "@supabase/supabase-js";
 import { z } from "zod";
 import { getDocumentById, saveSuggestions } from "@/lib/db/queries";
 import type { Suggestion } from "@/lib/db/schema";
@@ -8,12 +8,12 @@ import { generateUUID } from "@/lib/utils";
 import { myProvider } from "../providers";
 
 type RequestSuggestionsProps = {
-  session: Session;
+  user: User;
   dataStream: UIMessageStreamWriter<ChatMessage>;
 };
 
 export const requestSuggestions = ({
-  session,
+  user,
   dataStream,
 }: RequestSuggestionsProps) =>
   tool({
@@ -30,6 +30,10 @@ export const requestSuggestions = ({
         return {
           error: "Document not found",
         };
+      }
+
+      if (!myProvider) {
+        throw new Error("Suggestion generation is not available in production mode without a configured provider");
       }
 
       const suggestions: Omit<
@@ -70,8 +74,8 @@ export const requestSuggestions = ({
         suggestions.push(suggestion);
       }
 
-      if (session.user?.id) {
-        const userId = session.user.id;
+      if (user?.id) {
+        const userId = user.id;
 
         await saveSuggestions({
           suggestions: suggestions.map((suggestion) => ({

@@ -1,10 +1,8 @@
 "use server";
 
 import { z } from "zod";
-
-import { createUser, getUser } from "@/lib/db/queries";
-
-import { signIn } from "./auth";
+import { redirect } from "next/navigation";
+import { createClient } from "@/lib/supabase/server";
 
 const authFormSchema = z.object({
   email: z.string().email(),
@@ -13,6 +11,7 @@ const authFormSchema = z.object({
 
 export type LoginActionState = {
   status: "idle" | "in_progress" | "success" | "failed" | "invalid_data";
+  message?: string;
 };
 
 export const login = async (
@@ -25,11 +24,15 @@ export const login = async (
       password: formData.get("password"),
     });
 
-    await signIn("credentials", {
+    const supabase = await createClient();
+    const { error } = await supabase.auth.signInWithPassword({
       email: validatedData.email,
       password: validatedData.password,
-      redirect: false,
     });
+
+    if (error) {
+      return { status: "failed", message: error.message };
+    }
 
     return { status: "success" };
   } catch (error) {
@@ -37,7 +40,7 @@ export const login = async (
       return { status: "invalid_data" };
     }
 
-    return { status: "failed" };
+    return { status: "failed", message: "An unexpected error occurred" };
   }
 };
 
@@ -49,6 +52,7 @@ export type RegisterActionState = {
     | "failed"
     | "user_exists"
     | "invalid_data";
+  message?: string;
 };
 
 export const register = async (
@@ -61,17 +65,18 @@ export const register = async (
       password: formData.get("password"),
     });
 
-    const [user] = await getUser(validatedData.email);
-
-    if (user) {
-      return { status: "user_exists" } as RegisterActionState;
-    }
-    await createUser(validatedData.email, validatedData.password);
-    await signIn("credentials", {
+    const supabase = await createClient();
+    const { data, error } = await supabase.auth.signUp({
       email: validatedData.email,
       password: validatedData.password,
-      redirect: false,
     });
+
+    if (error) {
+      if (error.message.includes("already registered")) {
+        return { status: "user_exists", message: "User already exists" };
+      }
+      return { status: "failed", message: error.message };
+    }
 
     return { status: "success" };
   } catch (error) {
@@ -79,6 +84,41 @@ export const register = async (
       return { status: "invalid_data" };
     }
 
-    return { status: "failed" };
+    return { status: "failed", message: "An unexpected error occurred" };
   }
 };
+
+export async function signInWithGithub() {
+  const supabase = await createClient();
+
+  const { data, error } = await supabase.auth.signInWithOAuth({
+    provider: "github",
+    options: {
+      redirectTo: `${process.env.NEXT_PUBLIC_SITE_URL}/auth/callback`,
+      scopes: "repo read:user user:email gist",
+    },
+  });
+
+  if (error) {
+    throw error;
+  }
+
+  if (data.url) {
+    redirect(data.url);
+  }
+}
+
+export async function logout() {
+  try {
+    const supabase = await createClient();
+    const { error } = await supabase.auth.signOut();
+
+    if (error) {
+      return { success: false, error: error.message };
+    }
+
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: "Failed to logout" };
+  }
+}

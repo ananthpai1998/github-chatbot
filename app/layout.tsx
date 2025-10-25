@@ -4,12 +4,27 @@ import { Toaster } from "sonner";
 import { ThemeProvider } from "@/components/theme-provider";
 
 import "./globals.css";
-import { SessionProvider } from "next-auth/react";
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://chat.vercel.ai"),
-  title: "Next.js Chatbot Template",
-  description: "Next.js chatbot template using the AI SDK.",
+  metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"),
+  title: {
+    default: "DevMate - Your AI-Powered GitHub Assistant",
+    template: "%s | DevMate"
+  },
+  description: "Chat with your repositories, manage issues, analyze code, and boost your development workflow with AI. Supports Claude, Gemini, and GPT with your own API keys.",
+  keywords: ["GitHub", "AI", "Assistant", "Developer Tools", "Code Analysis", "Repository Management", "Claude", "Gemini", "GPT"],
+  authors: [{ name: "DevMate" }],
+  openGraph: {
+    title: "DevMate - Your AI-Powered GitHub Assistant",
+    description: "Chat with your repositories, manage issues, and analyze code with AI assistance.",
+    type: "website",
+    siteName: "DevMate"
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "DevMate - Your AI-Powered GitHub Assistant",
+    description: "Chat with your repositories, manage issues, and analyze code with AI assistance."
+  }
 };
 
 export const viewport = {
@@ -79,7 +94,7 @@ export default function RootLayout({
           enableSystem
         >
           <Toaster position="top-center" />
-          <SessionProvider>{children}</SessionProvider>
+          {children}
         </ThemeProvider>
       </body>
     </html>

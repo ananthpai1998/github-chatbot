@@ -28,57 +28,16 @@ import {
   type Suggestion,
   stream,
   suggestion,
-  type User,
-  user,
   vote,
 } from "./schema";
-import { generateHashedPassword } from "./utils";
 
-// Optionally, if not using email/pass login, you can
-// use the Drizzle adapter for Auth.js / NextAuth
-// https://authjs.dev/reference/adapter/drizzle
+// User authentication is handled entirely by Supabase Auth (auth.users table)
+// No custom User table - Supabase manages authentication, passwords, OAuth, etc.
+// Use supabase.auth.getUser() to get user information
 
 // biome-ignore lint: Forbidden non-null assertion.
 const client = postgres(process.env.POSTGRES_URL!);
 const db = drizzle(client);
-
-export async function getUser(email: string): Promise<User[]> {
-  try {
-    return await db.select().from(user).where(eq(user.email, email));
-  } catch (_error) {
-    throw new ChatSDKError(
-      "bad_request:database",
-      "Failed to get user by email"
-    );
-  }
-}
-
-export async function createUser(email: string, password: string) {
-  const hashedPassword = generateHashedPassword(password);
-
-  try {
-    return await db.insert(user).values({ email, password: hashedPassword });
-  } catch (_error) {
-    throw new ChatSDKError("bad_request:database", "Failed to create user");
-  }
-}
-
-export async function createGuestUser() {
-  const email = `guest-${Date.now()}`;
-  const password = generateHashedPassword(generateUUID());
-
-  try {
-    return await db.insert(user).values({ email, password }).returning({
-      id: user.id,
-      email: user.email,
-    });
-  } catch (_error) {
-    throw new ChatSDKError(
-      "bad_request:database",
-      "Failed to create guest user"
-    );
-  }
-}
 
 export async function saveChat({
   id,
@@ -92,6 +51,7 @@ export async function saveChat({
   visibility: VisibilityType;
 }) {
   try {
+    console.log("[DB] Saving chat:", { id, userId, title, visibility });
     return await db.insert(chat).values({
       id,
       createdAt: new Date(),
@@ -99,7 +59,15 @@ export async function saveChat({
       title,
       visibility,
     });
-  } catch (_error) {
+  } catch (error) {
+    console.error("[DB] ❌ Failed to save chat - Full error:", error);
+    console.error("[DB] Error details:", {
+      name: (error as any)?.name,
+      message: (error as any)?.message,
+      code: (error as any)?.code,
+      detail: (error as any)?.detail,
+      constraint: (error as any)?.constraint,
+    });
     throw new ChatSDKError("bad_request:database", "Failed to save chat");
   }
 }

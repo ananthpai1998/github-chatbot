@@ -2,13 +2,14 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useSession } from "next-auth/react";
 import { useActionState, useEffect, useState } from "react";
+import { SiGithub } from "@icons-pack/react-simple-icons";
 
 import { AuthForm } from "@/components/auth-form";
 import { SubmitButton } from "@/components/submit-button";
 import { toast } from "@/components/toast";
-import { type LoginActionState, login } from "../actions";
+import { type LoginActionState, login, signInWithGithub } from "../actions";
+import { Button } from "@/components/ui/button";
 
 export default function Page() {
   const router = useRouter();
@@ -23,13 +24,11 @@ export default function Page() {
     }
   );
 
-  const { update: updateSession } = useSession();
-
   useEffect(() => {
     if (state.status === "failed") {
       toast({
         type: "error",
-        description: "Invalid credentials!",
+        description: state.message || "Invalid credentials!",
       });
     } else if (state.status === "invalid_data") {
       toast({
@@ -38,39 +37,75 @@ export default function Page() {
       });
     } else if (state.status === "success") {
       setIsSuccessful(true);
-      updateSession();
-      router.refresh();
+      router.push("/chat");
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.status]);
+  }, [state.status, state.message, router]);
 
   const handleSubmit = (formData: FormData) => {
     setEmail(formData.get("email") as string);
     formAction(formData);
   };
 
+  const handleGitHubSignIn = async () => {
+    try {
+      await signInWithGithub();
+    } catch (error) {
+      toast({
+        type: "error",
+        description: "Failed to sign in with GitHub",
+      });
+    }
+  };
+
   return (
     <div className="flex h-dvh w-screen items-start justify-center bg-background pt-12 md:items-center md:pt-0">
       <div className="flex w-full max-w-md flex-col gap-12 overflow-hidden rounded-2xl">
         <div className="flex flex-col items-center justify-center gap-2 px-4 text-center sm:px-16">
-          <h3 className="font-semibold text-xl dark:text-zinc-50">Sign In</h3>
+          <h3 className="font-semibold text-xl dark:text-zinc-50">
+            Sign In to DevMate
+          </h3>
           <p className="text-gray-500 text-sm dark:text-zinc-400">
-            Use your email and password to sign in
+            Your GitHub AI Assistant
           </p>
         </div>
-        <AuthForm action={handleSubmit} defaultEmail={email}>
-          <SubmitButton isSuccessful={isSuccessful}>Sign in</SubmitButton>
-          <p className="mt-4 text-center text-gray-600 text-sm dark:text-zinc-400">
-            {"Don't have an account? "}
-            <Link
-              className="font-semibold text-gray-800 hover:underline dark:text-zinc-200"
-              href="/register"
+
+        <div className="flex flex-col gap-4 px-4 sm:px-16">
+          <form action={handleGitHubSignIn}>
+            <Button
+              type="submit"
+              variant="outline"
+              className="w-full flex items-center gap-2"
             >
-              Sign up
-            </Link>
-            {" for free."}
-          </p>
-        </AuthForm>
+              <SiGithub className="h-5 w-5" />
+              Continue with GitHub
+            </Button>
+          </form>
+
+          <div className="relative">
+            <div className="absolute inset-0 flex items-center">
+              <span className="w-full border-t" />
+            </div>
+            <div className="relative flex justify-center text-xs uppercase">
+              <span className="bg-background px-2 text-muted-foreground">
+                Or continue with email
+              </span>
+            </div>
+          </div>
+
+          <AuthForm action={handleSubmit} defaultEmail={email}>
+            <SubmitButton isSuccessful={isSuccessful}>Sign in</SubmitButton>
+            <p className="mt-4 text-center text-gray-600 text-sm dark:text-zinc-400">
+              {"Don't have an account? "}
+              <Link
+                className="font-semibold text-gray-800 hover:underline dark:text-zinc-200"
+                href="/register"
+              >
+                Sign up
+              </Link>
+              {" for free."}
+            </p>
+          </AuthForm>
+        </div>
       </div>
     </div>
   );

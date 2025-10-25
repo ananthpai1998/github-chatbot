@@ -13,21 +13,14 @@ import {
 } from "drizzle-orm/pg-core";
 import type { AppUsage } from "../usage";
 
-export const user = pgTable("User", {
-  id: uuid("id").primaryKey().notNull().defaultRandom(),
-  email: varchar("email", { length: 64 }).notNull(),
-  password: varchar("password", { length: 64 }),
-});
-
-export type User = InferSelectModel<typeof user>;
+// User management is handled by Supabase Auth (auth.users table)
+// No custom User table needed - Supabase handles authentication, passwords, OAuth, etc.
 
 export const chat = pgTable("Chat", {
   id: uuid("id").primaryKey().notNull().defaultRandom(),
   createdAt: timestamp("createdAt").notNull(),
   title: text("title").notNull(),
-  userId: uuid("userId")
-    .notNull()
-    .references(() => user.id),
+  userId: uuid("userId").notNull(), // References auth.users (Supabase Auth managed)
   visibility: varchar("visibility", { enum: ["public", "private"] })
     .notNull()
     .default("private"),
@@ -115,9 +108,7 @@ export const document = pgTable(
     kind: varchar("text", { enum: ["text", "code", "image", "sheet"] })
       .notNull()
       .default("text"),
-    userId: uuid("userId")
-      .notNull()
-      .references(() => user.id),
+    userId: uuid("userId").notNull(), // References auth.users (Supabase Auth managed)
   },
   (table) => {
     return {
@@ -138,9 +129,7 @@ export const suggestion = pgTable(
     suggestedText: text("suggestedText").notNull(),
     description: text("description"),
     isResolved: boolean("isResolved").notNull().default(false),
-    userId: uuid("userId")
-      .notNull()
-      .references(() => user.id),
+    userId: uuid("userId").notNull(), // References auth.users (Supabase Auth managed)
     createdAt: timestamp("createdAt").notNull(),
   },
   (table) => ({
