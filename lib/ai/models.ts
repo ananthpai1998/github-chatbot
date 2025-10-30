@@ -16,6 +16,28 @@ export type ChatModel = {
 // Anthropic Claude Models
 export const claudeModels: ChatModel[] = [
   {
+    id: "claude-sonnet-4-20250514",
+    name: "Claude Sonnet 4",
+    description:
+      "Latest generation Claude with advanced thinking and multimodal capabilities",
+    provider: "anthropic",
+    modelId: "claude-sonnet-4-20250514",
+    contextWindow: 200000,
+    supportsVision: true,
+    supportsTools: true,
+  },
+  {
+    id: "claude-3-7-sonnet-20250219",
+    name: "Claude 3.7 Sonnet",
+    description:
+      "Enhanced Claude 3 with improved reasoning and code understanding",
+    provider: "anthropic",
+    modelId: "claude-3-7-sonnet-20250219",
+    contextWindow: 200000,
+    supportsVision: true,
+    supportsTools: true,
+  },
+  {
     id: "claude-3-5-sonnet-20241022",
     name: "Claude 3.5 Sonnet",
     description:
@@ -51,23 +73,46 @@ export const claudeModels: ChatModel[] = [
 // Google Gemini Models
 export const geminiModels: ChatModel[] = [
   {
-    id: "gemini-2.0-flash-exp",
-    name: "Gemini 2.0 Flash",
+    id: "gemini-2.5-pro",
+    name: "Gemini 2.5 Pro",
     description:
-      "Latest experimental Gemini model with multimodal capabilities",
+      "Latest flagship Gemini with advanced thinking and multimodal capabilities",
     provider: "google",
-    modelId: "gemini-2.0-flash-exp",
+    modelId: "gemini-2.5-pro",
+    contextWindow: 2000000,
+    supportsVision: true,
+    supportsTools: true,
+  },
+  {
+    id: "gemini-2.5-flash",
+    name: "Gemini 2.5 Flash",
+    description:
+      "Fast and efficient Gemini 2.5 with enhanced performance",
+    provider: "google",
+    modelId: "gemini-2.5-flash",
     contextWindow: 1000000,
     supportsVision: true,
     supportsTools: true,
   },
   {
-    id: "gemini-exp-1206",
-    name: "Gemini Experimental",
-    description: "Experimental Gemini model with enhanced reasoning",
+    id: "gemini-2.5-flash-lite",
+    name: "Gemini 2.5 Flash Lite",
+    description:
+      "Lightweight version optimized for speed and efficiency",
     provider: "google",
-    modelId: "gemini-exp-1206",
-    contextWindow: 200000,
+    modelId: "gemini-2.5-flash-lite",
+    contextWindow: 1000000,
+    supportsVision: true,
+    supportsTools: true,
+  },
+  {
+    id: "gemini-2.0-flash",
+    name: "Gemini 2.0 Flash",
+    description:
+      "Stable Gemini 2.0 model with multimodal capabilities",
+    provider: "google",
+    modelId: "gemini-2.0-flash",
+    contextWindow: 1000000,
     supportsVision: true,
     supportsTools: true,
   },
@@ -96,6 +141,26 @@ export const geminiModels: ChatModel[] = [
 // OpenAI GPT Models
 export const gptModels: ChatModel[] = [
   {
+    id: "gpt-4.1",
+    name: "GPT-4.1",
+    description: "Latest GPT-4.1 with improved reasoning and tool use",
+    provider: "openai",
+    modelId: "gpt-4.1",
+    contextWindow: 128000,
+    supportsVision: true,
+    supportsTools: true,
+  },
+  {
+    id: "gpt-4.1-mini",
+    name: "GPT-4.1 Mini",
+    description: "Efficient GPT-4.1 variant for everyday tasks",
+    provider: "openai",
+    modelId: "gpt-4.1-mini",
+    contextWindow: 128000,
+    supportsVision: true,
+    supportsTools: true,
+  },
+  {
     id: "gpt-4o",
     name: "GPT-4o",
     description: "Most capable GPT model with vision and tool use",
@@ -116,14 +181,24 @@ export const gptModels: ChatModel[] = [
     supportsTools: true,
   },
   {
-    id: "gpt-4-turbo",
-    name: "GPT-4 Turbo",
-    description: "Previous generation with strong reasoning capabilities",
+    id: "o3",
+    name: "o3",
+    description: "Advanced reasoning model with configurable reasoning effort",
     provider: "openai",
-    modelId: "gpt-4-turbo",
+    modelId: "o3",
     contextWindow: 128000,
-    supportsVision: true,
-    supportsTools: true,
+    supportsVision: false,
+    supportsTools: false,
+  },
+  {
+    id: "o4-mini",
+    name: "o4 Mini",
+    description: "Efficient reasoning model for complex problem-solving",
+    provider: "openai",
+    modelId: "o4-mini",
+    contextWindow: 128000,
+    supportsVision: false,
+    supportsTools: false,
   },
   {
     id: "o1-preview",

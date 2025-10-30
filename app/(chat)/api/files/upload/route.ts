@@ -2,19 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { createClient } from "@/lib/supabase/server";
-
-// Use Blob instead of File since File is not available in Node.js environment
-const FileSchema = z.object({
-  file: z
-    .instanceof(Blob)
-    .refine((file) => file.size <= 5 * 1024 * 1024, {
-      message: "File size should be less than 5MB",
-    })
-    // Update the file type based on the kind of files you want to accept
-    .refine((file) => ["image/jpeg", "image/png"].includes(file.type), {
-      message: "File type should be JPEG or PNG",
-    }),
-});
+import { getModelWithCapabilities } from "@/lib/ai/model-loader";
 
 export async function POST(request: Request) {
   const supabase = await createClient();
@@ -31,19 +19,55 @@ export async function POST(request: Request) {
   try {
     const formData = await request.formData();
     const file = formData.get("file") as Blob;
+    const modelId = formData.get("modelId") as string;
 
     if (!file) {
       return NextResponse.json({ error: "No file uploaded" }, { status: 400 });
     }
 
-    const validatedFile = FileSchema.safeParse({ file });
+    if (!modelId) {
+      return NextResponse.json({ error: "Model ID is required" }, { status: 400 });
+    }
 
-    if (!validatedFile.success) {
-      const errorMessage = validatedFile.error.errors
-        .map((error) => error.message)
-        .join(", ");
+    // Load model configuration to check file upload capabilities
+    const modelConfig = await getModelWithCapabilities(modelId);
 
-      return NextResponse.json({ error: errorMessage }, { status: 400 });
+    if (!modelConfig) {
+      return NextResponse.json({ error: "Model not found" }, { status: 404 });
+    }
+
+    // Check if file inputs are enabled for this model
+    if (!modelConfig.capabilities?.fileInputs?.enabled) {
+      return NextResponse.json(
+        { error: "File uploads are not supported for this model" },
+        { status: 400 }
+      );
+    }
+
+    // Get allowed file types for this model (default to images only)
+    const allowedTypes = modelConfig.allowedFileTypes && modelConfig.allowedFileTypes.length > 0
+      ? modelConfig.allowedFileTypes
+      : ["image/jpeg", "image/png"];
+
+    // Get max file size from metadata (default to 5MB)
+    const maxFileSize = (modelConfig.metadata as any)?.maxFileSize || 5 * 1024 * 1024;
+
+    // Validate file size
+    if (file.size > maxFileSize) {
+      return NextResponse.json(
+        { error: `File size exceeds ${maxFileSize / 1024 / 1024}MB limit for this model` },
+        { status: 400 }
+      );
+    }
+
+    // Validate file type
+    if (!allowedTypes.includes(file.type)) {
+      return NextResponse.json(
+        {
+          error: `File type ${file.type} is not allowed for this model. Allowed types: ${allowedTypes.join(", ")}`
+        },
+        { status: 400 }
+      );
     }
 
     // Get filename from formData since Blob doesn't have name property

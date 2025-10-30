@@ -1,0 +1,1 @@
+ALTER TABLE "ToolConfig" ADD COLUMN "toolPrompts" jsonb DEFAULT 'null'::jsonb;

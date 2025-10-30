@@ -1,0 +1,31 @@
+
+> ai-chatbot@3.1.0 dev
+> next dev --turbo
+
+ ⚠ Port 3000 is in use, trying 3001 instead.
+ ⚠ Port 3001 is in use, trying 3002 instead.
+   ▲ Next.js 15.3.0-canary.31 (Turbopack)
+   - Local:        http://localhost:3002
+   - Network:      http://192.168.1.227:3002
+   - Environments: .env.local
+   - Experiments (use with caution):
+     ✓ ppr
+
+ ✓ Starting...
+ ✓ Compiled in 793ms
+ ✓ Ready in 2s
+ ○ Compiling / ...
+ ✓ Compiled / in 2.2s
+ GET / 200 in 2558ms
+ ○ Compiling /chat ...
+ ✓ Compiled /chat in 5.2s
+ GET /chat 200 in 5749ms
+ ○ Compiling /api/user/preferences ...
+ ✓ Compiled /api/user/preferences in 888ms
+ GET /api/models/enabled 200 in 1508ms
+ GET /api/models/enabled 200 in 1484ms
+ GET /api/models/enabled 200 in 1519ms
+ GET /api/history?limit=20 200 in 1594ms
+ GET /api/user/preferences 200 in 1728ms
+ GET /api/models/enabled 200 in 135ms
+ GET /api/user/preferences 200 in 472ms

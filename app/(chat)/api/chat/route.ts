@@ -20,8 +20,10 @@ import { createClient } from "@/lib/supabase/server";
 import type { VisibilityType } from "@/components/visibility-selector";
 import { defaultEntitlements } from "@/lib/ai/entitlements";
 import { getModelById, type ChatModel } from "@/lib/ai/models";
-import { type RequestHints, systemPrompt } from "@/lib/ai/prompts";
-import { getLanguageModel, myProvider } from "@/lib/ai/providers";
+import { getModelWithCapabilities, hasCapability } from "@/lib/ai/model-loader";
+import { type RequestHints, systemPrompt, getRequestPromptFromHints } from "@/lib/ai/prompts";
+import { getLanguageModel, createProviderInstance, myProvider, type ProviderType } from "@/lib/ai/providers";
+import { buildProviderTools, buildProviderOptions, buildToolPrompts } from "@/lib/ai/tool-builder";
 import { createDocument } from "@/lib/ai/tools/create-document";
 import { createGitHubTools } from "@/lib/ai/tools/github-tools";
 import { getWeather } from "@/lib/ai/tools/get-weather";
@@ -38,6 +40,9 @@ import {
   saveMessages,
   updateChatLastContextById,
 } from "@/lib/db/queries";
+import { logUsage, calculateCost } from "@/lib/db/usage-queries";
+import { isThinkingEnabledForUser } from "@/lib/db/user-preferences-queries";
+import { getAgentById, getAllTools } from "@/lib/db/admin-queries";
 import { ChatSDKError } from "@/lib/errors";
 import type { ChatMessage } from "@/lib/types";
 import type { AppUsage } from "@/lib/usage";
@@ -129,8 +134,12 @@ export async function POST(request: Request) {
       visibility: selectedVisibilityType,
     });
 
-    // Get model configuration
-    const modelConfig = getModelById(selectedChatModel);
+    // Get model configuration from database (with capabilities)
+    const dbModelConfig = await getModelWithCapabilities(selectedChatModel);
+
+    // Fallback to static config if not in database
+    const modelConfig = dbModelConfig || getModelById(selectedChatModel);
+
     if (!modelConfig) {
       console.error("[Chat API] ❌ Invalid model:", selectedChatModel);
       return new ChatSDKError(
@@ -138,10 +147,23 @@ export async function POST(request: Request) {
         "Invalid model selected"
       ).toResponse();
     }
+
+    // Check if model is enabled (only for database-configured models)
+    if (dbModelConfig && !dbModelConfig.isEnabled) {
+      console.error("[Chat API] ❌ Model disabled:", selectedChatModel);
+      return new ChatSDKError(
+        "bad_request:api",
+        "This model is currently disabled by the administrator"
+      ).toResponse();
+    }
+
     console.log("[Chat API] ✅ Model config loaded:", {
       provider: modelConfig.provider,
       modelId: modelConfig.modelId,
       supportsTools: modelConfig.supportsTools,
+      hasCapabilities: !!dbModelConfig?.capabilities,
+      source: dbModelConfig ? "database" : "static",
+      isEnabled: dbModelConfig?.isEnabled ?? true,
     });
 
     const supabase = await createClient();
@@ -236,25 +258,33 @@ export async function POST(request: Request) {
     console.log("[Chat API] Stream ID created:", streamId);
 
     let finalMergedUsage: AppUsage | undefined;
+    let capturedActiveToolNames: string[] = []; // Capture tool names for usage logging
 
     console.log("[Chat API] Creating UI message stream...");
     const stream = createUIMessageStream({
       execute: async ({ writer: dataStream }) => {
         console.log("[Chat API] Stream execute started");
-        // Get the appropriate model instance
+
+        // Get the appropriate model instance and provider
         console.log("[Chat API] Initializing language model...", {
           isTest: isTestEnvironment,
           provider: modelConfig.provider,
           modelId: modelConfig.modelId,
         });
 
-        const model = isTestEnvironment
-          ? myProvider?.languageModel(selectedChatModel)
-          : getLanguageModel(
-              modelConfig.provider,
-              modelConfig.modelId,
-              apiKey
-            );
+        let model;
+        let providerInstance;
+
+        if (isTestEnvironment) {
+          model = myProvider?.languageModel(selectedChatModel);
+        } else {
+          // Create provider instance for tool building
+          providerInstance = createProviderInstance(
+            modelConfig.provider as ProviderType,
+            apiKey
+          );
+          model = providerInstance(modelConfig.modelId);
+        }
 
         if (!model) {
           console.error("[Chat API] ❌ Failed to initialize language model");
@@ -262,18 +292,65 @@ export async function POST(request: Request) {
         }
         console.log("[Chat API] ✅ Language model initialized");
 
-        // Initialize base tools
-        const baseTools: Record<string, any> = {
-          getWeather,
-          createDocument: createDocument({ user, dataStream }),
-          updateDocument: updateDocument({ user, dataStream }),
-          requestSuggestions: requestSuggestions({
+        // Load tool configurations from database
+        console.log("[Chat API] Loading tool configurations...");
+        const toolConfigs = await getAllTools();
+        const toolConfigMap = new Map(toolConfigs.map(tc => [tc.id, tc]));
+        console.log(`[Chat API] Loaded ${toolConfigs.length} tool configs`);
+
+        // Initialize base tools with their configurations
+        const baseTools: Record<string, any> = {};
+
+        // Only include enabled tools
+        if (toolConfigMap.get('getWeather')?.isEnabled !== false) {
+          console.log("[Chat API] ✓ Adding getWeather tool");
+          baseTools.getWeather = getWeather;
+        } else {
+          console.log("[Chat API] ✗ Skipping getWeather (disabled)");
+        }
+
+        if (toolConfigMap.get('createDocument')?.isEnabled !== false) {
+          console.log("[Chat API] ✓ Adding createDocument tool");
+          const createDocConfig = toolConfigMap.get('createDocument');
+          console.log("[Chat API] createDocument config:", {
+            isEnabled: createDocConfig?.isEnabled,
+            hasToolPrompts: !!createDocConfig?.toolPrompts,
+            description: createDocConfig?.toolPrompts?.description?.substring(0, 50),
+          });
+          baseTools.createDocument = createDocument({
             user,
             dataStream,
-          }),
-        };
+            toolConfig: createDocConfig
+          });
+        } else {
+          console.log("[Chat API] ✗ Skipping createDocument (disabled)");
+        }
+
+        if (toolConfigMap.get('updateDocument')?.isEnabled !== false) {
+          console.log("[Chat API] ✓ Adding updateDocument tool");
+          baseTools.updateDocument = updateDocument({
+            user,
+            dataStream,
+            toolConfig: toolConfigMap.get('updateDocument')
+          });
+        } else {
+          console.log("[Chat API] ✗ Skipping updateDocument (disabled)");
+        }
+
+        if (toolConfigMap.get('requestSuggestions')?.isEnabled !== false) {
+          console.log("[Chat API] ✓ Adding requestSuggestions tool");
+          baseTools.requestSuggestions = requestSuggestions({
+            user,
+            dataStream,
+            toolConfig: toolConfigMap.get('requestSuggestions')
+          });
+        } else {
+          console.log("[Chat API] ✗ Skipping requestSuggestions (disabled)");
+        }
 
         const baseToolNames = Object.keys(baseTools);
+        console.log("[Chat API] Base tools enabled:", baseToolNames);
+        console.log("[Chat API] Base tools count:", baseToolNames.length);
 
         // Load GitHub tools if token is provided
         let githubTools: Record<string, any> = {};
@@ -291,30 +368,206 @@ export async function POST(request: Request) {
           }
         }
 
-        // Merge tools
-        const allTools = { ...baseTools, ...githubTools };
-        const activeToolNames = modelConfig.supportsTools !== false
-          ? [...baseToolNames, ...githubToolNames]
+        // Build provider-specific tools (code execution, web search, etc.)
+        let providerTools: Record<string, any> = {};
+        if (!isTestEnvironment && providerInstance && dbModelConfig?.capabilities) {
+          try {
+            console.log("[Chat API] Building provider-specific tools...");
+            providerTools = buildProviderTools(
+              modelConfig.provider as ProviderType,
+              dbModelConfig.capabilities,
+              providerInstance,
+              apiKey // Pass API key for custom tools like image generation
+            );
+            console.log(`[Chat API] Built ${Object.keys(providerTools).length} provider tools`);
+          } catch (error) {
+            console.error("[Chat API] Failed to build provider tools:", error);
+            // Continue without provider tools if building fails
+          }
+        }
+
+        // Load agent configuration (chatModel agent)
+        const agentConfig = await getAgentById("chatModel");
+        console.log("[Chat API] Agent config loaded:", {
+          name: agentConfig?.name,
+          enabledTools: agentConfig?.enabledTools,
+          hasSystemPrompt: !!agentConfig?.systemPrompt,
+          systemPromptLength: agentConfig?.systemPrompt?.length,
+        });
+
+        // Merge all tools
+        const allTools = { ...baseTools, ...githubTools, ...providerTools };
+        const providerToolNames = Object.keys(providerTools);
+
+        // Filter tools based on agent's enabledTools + provider tools
+        let activeToolNames: string[] = [];
+        if (modelConfig.supportsTools !== false) {
+          if (agentConfig?.enabledTools && agentConfig.enabledTools.length > 0) {
+            // Use agent's enabled tools + provider tools (if admin enabled)
+            const agentToolNames = agentConfig.enabledTools.filter(
+              (toolName) => {
+                const exists = toolName in allTools;
+                console.log(`[Chat API] Checking agent tool "${toolName}": ${exists ? "✓ found" : "✗ not found"}`);
+                return exists;
+              }
+            );
+            activeToolNames = [...agentToolNames, ...providerToolNames];
+            console.log("[Chat API] Using agent-filtered tools:", {
+              agentTools: agentToolNames,
+              providerTools: providerToolNames,
+              totalActive: activeToolNames.length,
+            });
+          } else {
+            // No agent filtering, use all tools
+            activeToolNames = [...baseToolNames, ...githubToolNames, ...providerToolNames];
+            console.log("[Chat API] No agent filtering, using all tools:", activeToolNames);
+          }
+        } else {
+          console.log("[Chat API] Model does not support tools");
+        }
+
+        console.log("[Chat API] === FINAL ACTIVE TOOLS ===");
+        console.log("[Chat API] Active tool names:", activeToolNames);
+        console.log("[Chat API] Active tools count:", activeToolNames.length);
+
+        // Capture for usage logging
+        capturedActiveToolNames = activeToolNames;
+
+        // Build provider options (for thinking, etc.)
+        const providerOptions = !isTestEnvironment && dbModelConfig
+          ? buildProviderOptions(
+              modelConfig.provider as ProviderType,
+              dbModelConfig.capabilities,
+              dbModelConfig.providerConfig
+            )
+          : undefined;
+
+        // Build enhanced system prompt with tool prompts
+        // Get user's thinking preference from database
+        const userThinkingEnabled = await isThinkingEnabledForUser(user.id);
+        console.log("[Chat API] User thinking enabled:", userThinkingEnabled);
+
+        // Build tool prompt additions based on capabilities
+        const toolPromptAdditions = dbModelConfig
+          ? buildToolPrompts(
+              dbModelConfig.capabilities,
+              dbModelConfig.toolPrompts,
+              userThinkingEnabled
+            )
           : [];
+
+        // Add tool-specific prompts from ToolConfig for enabled tools
+        const toolSpecificPrompts: string[] = [];
+        for (const toolId of activeToolNames) {
+          const toolCfg = toolConfigMap.get(toolId);
+          if (toolCfg?.toolPrompts) {
+            const prompts = [];
+            if (toolCfg.toolPrompts.description) {
+              prompts.push(`**${toolCfg.name}**: ${toolCfg.toolPrompts.description}`);
+            }
+            if (toolCfg.toolPrompts.usageGuidelines) {
+              prompts.push(`Usage: ${toolCfg.toolPrompts.usageGuidelines}`);
+            }
+            if (toolCfg.toolPrompts.examples) {
+              prompts.push(`Examples: ${toolCfg.toolPrompts.examples}`);
+            }
+            if (prompts.length > 0) {
+              toolSpecificPrompts.push(prompts.join('\n'));
+            }
+          }
+        }
+
+        if (toolSpecificPrompts.length > 0) {
+          toolPromptAdditions.push(`\n## Available Tools\n\n${toolSpecificPrompts.join('\n\n')}`);
+        }
+
+        console.log(`[Chat API] Added ${toolSpecificPrompts.length} tool-specific prompts`);
+
+        // Build system prompt from agent config
+        const agentBasePrompt = agentConfig?.systemPrompt || systemPrompt({ selectedChatModel, requestHints });
+
+        // Append request hints
+        const requestPrompt = getRequestPromptFromHints(requestHints);
+        const agentPromptWithHints = `${agentBasePrompt}\n\n${requestPrompt}`;
+
+        // Add model-specific base prompt if available (for provider-specific instructions)
+        const modelToolPromptBase = dbModelConfig?.toolPrompts?.base;
+        const baseWithModel = modelToolPromptBase
+          ? `${agentPromptWithHints}\n\n${modelToolPromptBase}`
+          : agentPromptWithHints;
+
+        // Append capability-specific tool prompts
+        const enhancedSystemPrompt = toolPromptAdditions.length > 0
+          ? `${baseWithModel}\n\n${toolPromptAdditions.join("\n\n")}`
+          : baseWithModel;
+
+        console.log("[Chat API] System prompt construction:", {
+          hasAgentConfig: !!agentConfig,
+          hasAgentSystemPrompt: !!agentConfig?.systemPrompt,
+          agentPromptLength: agentBasePrompt.length,
+          hasModelToolPromptBase: !!modelToolPromptBase,
+          modelPromptLength: modelToolPromptBase?.length || 0,
+          toolPromptAdditionsCount: toolPromptAdditions.length,
+          finalPromptLength: enhancedSystemPrompt.length,
+          includesArtifactsPrompt: enhancedSystemPrompt.includes("createDocument"),
+        });
+
+        // Temporary: Print full system prompt for debugging
+        console.log("[Chat API] === FULL SYSTEM PROMPT ===");
+        console.log(enhancedSystemPrompt);
+        console.log("[Chat API] === END SYSTEM PROMPT ===");
 
         console.log("[Chat API] Starting streamText with:", {
           toolCount: Object.keys(allTools).length,
           activeToolsCount: activeToolNames.length,
           messageCount: uiMessages.length,
+          hasProviderOptions: !!providerOptions,
+          toolPromptCount: toolPromptAdditions.length,
         });
 
-        const result = streamText({
-          model,
-          system: systemPrompt({ selectedChatModel, requestHints }),
-          messages: convertToModelMessages(uiMessages),
-          stopWhen: stepCountIs(5),
-          experimental_activeTools: activeToolNames,
-          experimental_transform: smoothStream({ chunking: "word" }),
-          tools: allTools,
-          experimental_telemetry: {
-            isEnabled: isProductionEnvironment,
-            functionId: "stream-text",
-          },
+        // Verify tool structure
+        console.log("[Chat API] === TOOL VERIFICATION ===");
+        for (const toolName of activeToolNames) {
+          const toolObj = allTools[toolName];
+          console.log(`[Chat API] Tool "${toolName}":`, {
+            exists: !!toolObj,
+            type: typeof toolObj,
+            hasDescription: !!(toolObj?.description),
+            hasParameters: !!(toolObj?.parameters),
+            hasExecute: !!(toolObj?.execute),
+            actualKeys: toolObj ? Object.keys(toolObj) : [],
+          });
+
+          // Debug: Log the actual tool object structure
+          if (toolName === "createDocument") {
+            console.log("[Chat API] createDocument full structure:", JSON.stringify(toolObj, null, 2));
+          }
+        }
+        console.log("[Chat API] === END TOOL VERIFICATION ===");
+
+        console.log("[Chat API] About to call streamText with:", {
+          modelProvider: modelConfig.provider,
+          modelId: modelConfig.id,
+          toolsCount: Object.keys(allTools).length,
+          activeToolsCount: activeToolNames.length,
+          messagesCount: uiMessages.length,
+        });
+
+        let result;
+        try {
+          result = streamText({
+            model,
+            system: enhancedSystemPrompt,
+            messages: convertToModelMessages(uiMessages),
+            stopWhen: stepCountIs(5),
+            experimental_activeTools: activeToolNames,
+            experimental_transform: smoothStream({ chunking: "word" }),
+            tools: allTools,
+            providerOptions, // Add provider options for thinking, code execution, etc.
+            experimental_telemetry: {
+              isEnabled: isProductionEnvironment,
+              functionId: "stream-text",
+            },
           onFinish: async ({ usage }) => {
             console.log("[Chat API] Stream finished, processing usage...");
             try {
@@ -347,15 +600,27 @@ export async function POST(request: Request) {
               dataStream.write({ type: "data-usage", data: finalMergedUsage });
             }
           },
-        });
+          });
+          console.log("[Chat API] streamText call successful, result object created");
+        } catch (error) {
+          console.error("[Chat API] ❌ Error calling streamText:", error);
+          console.error("[Chat API] Error details:", {
+            name: error instanceof Error ? error.name : "Unknown",
+            message: error instanceof Error ? error.message : String(error),
+            stack: error instanceof Error ? error.stack : undefined,
+          });
+          throw error;
+        }
 
         result.consumeStream();
+        console.log("[Chat API] Stream consumption started");
 
         dataStream.merge(
           result.toUIMessageStream({
             sendReasoning: true,
           })
         );
+        console.log("[Chat API] Data stream merged with UI message stream");
       },
       generateId: generateUUID,
       onFinish: async ({ messages }) => {
@@ -376,8 +641,39 @@ export async function POST(request: Request) {
               chatId: id,
               context: finalMergedUsage,
             });
+
+            // Log usage to database for analytics
+            const cost = calculateCost(finalMergedUsage, dbModelConfig?.pricing);
+            const assistantMessage = messages.find(m => m.role === "assistant");
+
+            // Map AI SDK usage properties to our schema
+            const inputTokens = (finalMergedUsage as any).promptTokens ?? 0;
+            const outputTokens = (finalMergedUsage as any).completionTokens ?? 0;
+
+            await logUsage({
+              userId: user.id,
+              chatId: id,
+              messageId: assistantMessage?.id,
+              modelId: selectedChatModel,
+              provider: modelConfig.provider,
+              inputTokens,
+              outputTokens,
+              totalTokens: finalMergedUsage.totalTokens ?? 0,
+              estimatedCost: cost,
+              currency: "USD",
+              toolsUsed: capturedActiveToolNames,
+              toolCallCount: 0, // Could be enhanced to track actual tool calls
+              metadata: {
+                modelIdActual: (finalMergedUsage as any).modelId,
+                contextWindow: modelConfig.contextWindow,
+              },
+            });
+            console.log("[Chat API] ✅ Usage logged:", {
+              tokens: finalMergedUsage.totalTokens,
+              cost: cost.toFixed(6),
+            });
           } catch (err) {
-            console.warn("Unable to persist last usage for chat", id, err);
+            console.warn("Unable to persist usage data:", err);
           }
         }
       },

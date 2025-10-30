@@ -1,0 +1,779 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { RefreshCw, Pencil, Check, X } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { Badge } from "@/components/ui/badge";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
+import { toast } from "sonner";
+import type { ModelConfig, ModelCapabilities, ProviderConfig } from "@/lib/db/schema";
+
+export function ModelsTab() {
+  const [models, setModels] = useState<ModelConfig[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
+  const [lastSynced, setLastSynced] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [editingModel, setEditingModel] = useState<ModelConfig | null>(null);
+
+  // Controlled state for capabilities (switches)
+  const [capThinking, setCapThinking] = useState(false);
+  const [capFileInputs, setCapFileInputs] = useState(false);
+  const [capCodeExecution, setCapCodeExecution] = useState(false);
+  const [capWebSearch, setCapWebSearch] = useState(false);
+  const [capImageGeneration, setCapImageGeneration] = useState(false);
+  const [capUrlContext, setCapUrlContext] = useState(false);
+
+  // Fetch models
+  const fetchModels = async () => {
+    try {
+      const response = await fetch("/api/admin/models");
+      const data = await response.json();
+      if (data.models) {
+        setModels(data.models);
+      }
+    } catch (error) {
+      toast.error("Failed to fetch models");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Fetch last sync time
+  const fetchLastSynced = async () => {
+    try {
+      const response = await fetch("/api/admin/models/sync-pricing");
+      const data = await response.json();
+      if (data.lastSynced) {
+        setLastSynced(data.lastSynced);
+      }
+    } catch (error) {
+      console.error("Failed to fetch last sync time");
+    }
+  };
+
+  useEffect(() => {
+    fetchModels();
+    fetchLastSynced();
+  }, []);
+
+  // Initialize switch states when editing a model
+  useEffect(() => {
+    if (editingModel) {
+      setCapThinking(editingModel.capabilities?.thinking?.enabled || false);
+      setCapFileInputs(editingModel.capabilities?.fileInputs?.enabled || false);
+      setCapCodeExecution(editingModel.capabilities?.codeExecution?.enabled || false);
+      setCapWebSearch(editingModel.capabilities?.webSearch?.enabled || false);
+      setCapImageGeneration(editingModel.capabilities?.imageGeneration?.enabled || false);
+      setCapUrlContext(editingModel.capabilities?.urlContext?.enabled || false);
+    }
+  }, [editingModel]);
+
+  // Handle sync pricing
+  const handleSyncPricing = async () => {
+    setSyncing(true);
+    try {
+      const response = await fetch("/api/admin/models/sync-pricing", {
+        method: "POST",
+      });
+      const data = await response.json();
+
+      if (data.success) {
+        toast.success(`Pricing synced! Updated ${data.updated} models`);
+        if (data.errors.length > 0) {
+          console.warn("Sync errors:", data.errors);
+        }
+        setLastSynced(data.lastSynced);
+        fetchModels();
+      } else {
+        toast.error("Failed to sync pricing");
+      }
+    } catch (error) {
+      toast.error("Failed to sync pricing");
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  // Handle toggle enabled
+  const handleToggle = async (id: string, enabled: boolean) => {
+    try {
+      const response = await fetch("/api/admin/models", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, action: "toggle", isEnabled: enabled }),
+      });
+
+      if (response.ok) {
+        toast.success(`Model ${enabled ? "enabled" : "disabled"}`);
+        fetchModels();
+      } else {
+        toast.error("Failed to update model");
+      }
+    } catch (error) {
+      toast.error("Failed to update model");
+    }
+  };
+
+  // Handle edit model
+  const handleEditModel = async (updates: Partial<ModelConfig>) => {
+    if (!editingModel) return;
+
+    console.log("[Models Tab] Saving model:", editingModel.id);
+    console.log("[Models Tab] Updates:", updates);
+
+    try {
+      const payload = { id: editingModel.id, ...updates };
+      console.log("[Models Tab] Request payload:", JSON.stringify(payload, null, 2));
+
+      const response = await fetch("/api/admin/models", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      console.log("[Models Tab] Response status:", response.status);
+
+      if (response.ok) {
+        toast.success("Model updated successfully");
+        setEditingModel(null);
+        fetchModels();
+      } else {
+        toast.error("Failed to update model");
+      }
+    } catch (error) {
+      toast.error("Failed to update model");
+    }
+  };
+
+  // Filter models by search
+  const filteredModels = models.filter((model) =>
+    model.name.toLowerCase().includes(search.toLowerCase()) ||
+    model.id.toLowerCase().includes(search.toLowerCase())
+  );
+
+  // Group by provider
+  const groupedModels = filteredModels.reduce((acc, model) => {
+    if (!acc[model.provider]) {
+      acc[model.provider] = [];
+    }
+    acc[model.provider].push(model);
+    return acc;
+  }, {} as Record<string, ModelConfig[]>);
+
+  if (loading) {
+    return <div className="text-center py-8">Loading models...</div>;
+  }
+
+  const enabledModelsCount = models.filter(m => m.isEnabled).length;
+  const hasNoEnabledModels = enabledModelsCount === 0;
+
+  return (
+    <div className="space-y-6">
+      {/* Header Actions */}
+      <div className="flex items-center justify-between">
+        <div className="space-y-1">
+          <h2 className="text-2xl font-semibold">Model Configuration</h2>
+          <p className="text-sm text-muted-foreground">
+            Manage available models and pricing
+            {lastSynced && (
+              <span className="ml-2">
+                • Last synced: {new Date(lastSynced).toLocaleString()}
+              </span>
+            )}
+          </p>
+        </div>
+        <Button onClick={handleSyncPricing} disabled={syncing}>
+          <RefreshCw className={`mr-2 h-4 w-4 ${syncing ? "animate-spin" : ""}`} />
+          {syncing ? "Syncing..." : "Sync Pricing"}
+        </Button>
+      </div>
+
+      {/* Warning: No Enabled Models */}
+      {hasNoEnabledModels && (
+        <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-4">
+          <div className="flex items-start gap-3">
+            <div className="rounded-full bg-destructive/20 p-2">
+              <svg
+                className="h-5 w-5 text-destructive"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+                />
+              </svg>
+            </div>
+            <div className="flex-1">
+              <h3 className="font-semibold text-destructive">No Models Enabled</h3>
+              <p className="mt-1 text-sm text-muted-foreground">
+                All models are currently disabled. Users will not be able to chat until at least one model is enabled.
+                Enable a model below to restore functionality.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Search */}
+      <Input
+        placeholder="Search models..."
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        className="max-w-sm"
+      />
+
+      {/* Models by Provider */}
+      <Accordion type="multiple" defaultValue={Object.keys(groupedModels)} className="w-full">
+        {Object.entries(groupedModels).map(([provider, providerModels]) => (
+          <AccordionItem key={provider} value={provider}>
+            <AccordionTrigger className="text-lg font-medium capitalize">
+              {provider} ({providerModels.length} models)
+            </AccordionTrigger>
+            <AccordionContent>
+              <div className="space-y-4 pt-4">
+                {providerModels.map((model) => (
+                  <div
+                    key={model.id}
+                    className="flex items-start justify-between rounded-lg border p-4"
+                  >
+                    <div className="flex-1 space-y-2">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h3 className="font-medium">{model.name}</h3>
+                        {model.supportsVision && (
+                          <Badge variant="outline" className="text-xs">
+                            Vision
+                          </Badge>
+                        )}
+                        {model.supportsTools && (
+                          <Badge variant="outline" className="text-xs">
+                            Tools
+                          </Badge>
+                        )}
+                        {model.capabilities?.thinking?.enabled && (
+                          <Badge variant="secondary" className="text-xs">
+                            Thinking
+                          </Badge>
+                        )}
+                        {model.capabilities?.codeExecution?.enabled && (
+                          <Badge variant="secondary" className="text-xs">
+                            Code
+                          </Badge>
+                        )}
+                        {model.capabilities?.webSearch?.enabled && (
+                          <Badge variant="secondary" className="text-xs">
+                            Web
+                          </Badge>
+                        )}
+                        {model.capabilities?.imageGeneration?.enabled && (
+                          <Badge variant="secondary" className="text-xs">
+                            Images
+                          </Badge>
+                        )}
+                        {model.capabilities?.urlContext?.enabled && (
+                          <Badge variant="secondary" className="text-xs">
+                            URLs
+                          </Badge>
+                        )}
+                      </div>
+                      <p className="text-sm text-muted-foreground">{model.description}</p>
+                      <div className="flex gap-4 text-sm">
+                        <span>
+                          <strong>Context:</strong> {model.contextWindow.toLocaleString()} tokens
+                        </span>
+                        {model.pricing && (
+                          <span>
+                            <strong>Pricing:</strong> ${model.pricing.inputPerMillion}/{model.pricing.outputPerMillion} per M tokens
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Switch
+                        checked={model.isEnabled}
+                        onCheckedChange={(checked) => handleToggle(model.id, checked)}
+                      />
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setEditingModel(model)}
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </AccordionContent>
+          </AccordionItem>
+        ))}
+      </Accordion>
+
+      {/* Edit Dialog */}
+      <Dialog open={!!editingModel} onOpenChange={(open) => !open && setEditingModel(null)}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Edit Model: {editingModel?.name}</DialogTitle>
+            <DialogDescription>
+              Update pricing, capabilities, and provider-specific configuration
+            </DialogDescription>
+          </DialogHeader>
+          {editingModel && (
+            <div className="space-y-6">
+              {/* Pricing Section */}
+              <div className="space-y-4">
+                <h3 className="text-sm font-semibold">Pricing</h3>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Input Cost (per million tokens)</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      defaultValue={editingModel.pricing?.inputPerMillion || 0}
+                      id="input-cost"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Output Cost (per million tokens)</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      defaultValue={editingModel.pricing?.outputPerMillion || 0}
+                      id="output-cost"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Capabilities Section */}
+              <div className="space-y-4">
+                <h3 className="text-sm font-semibold">Capabilities</h3>
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="space-y-0.5">
+                      <Label>Thinking / Reasoning</Label>
+                      <p className="text-xs text-muted-foreground">
+                        Enable extended reasoning capabilities
+                      </p>
+                    </div>
+                    <Switch
+                      checked={capThinking}
+                      onCheckedChange={setCapThinking}
+                      id="cap-thinking"
+                    />
+                  </div>
+                  {capThinking && (
+                    <div className="ml-4 space-y-2">
+                      <Label className="text-xs">Budget Tokens (max reasoning)</Label>
+                      <Input
+                        type="number"
+                        step="1024"
+                        defaultValue={editingModel.capabilities?.thinking?.budgetTokens || 8192}
+                        id="thinking-budget"
+                        className="max-w-[200px]"
+                      />
+                    </div>
+                  )}
+
+                  <div className="flex items-center justify-between">
+                    <div className="space-y-0.5">
+                      <Label>File Inputs</Label>
+                      <p className="text-xs text-muted-foreground">
+                        Support PDF and document uploads
+                      </p>
+                    </div>
+                    <Switch
+                      checked={capFileInputs}
+                      onCheckedChange={setCapFileInputs}
+                      id="cap-file-inputs"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between">
+                    <div className="space-y-0.5">
+                      <Label>Code Execution</Label>
+                      <p className="text-xs text-muted-foreground">
+                        Python code interpreter tool
+                      </p>
+                    </div>
+                    <Switch
+                      checked={capCodeExecution}
+                      onCheckedChange={setCapCodeExecution}
+                      id="cap-code-execution"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between">
+                    <div className="space-y-0.5">
+                      <Label>Web Search</Label>
+                      <p className="text-xs text-muted-foreground">
+                        Real-time web search capability
+                      </p>
+                    </div>
+                    <Switch
+                      checked={capWebSearch}
+                      onCheckedChange={setCapWebSearch}
+                      id="cap-web-search"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between">
+                    <div className="space-y-0.5">
+                      <Label>Image Generation</Label>
+                      <p className="text-xs text-muted-foreground">
+                        Generate images from text prompts
+                      </p>
+                    </div>
+                    <Switch
+                      checked={capImageGeneration}
+                      onCheckedChange={setCapImageGeneration}
+                      id="cap-image-generation"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between">
+                    <div className="space-y-0.5">
+                      <Label>URL Context</Label>
+                      <p className="text-xs text-muted-foreground">
+                        Fetch and analyze web URLs
+                      </p>
+                    </div>
+                    <Switch
+                      checked={capUrlContext}
+                      onCheckedChange={setCapUrlContext}
+                      id="cap-url-context"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* File Types Configuration */}
+              {capFileInputs && (
+                <div className="space-y-4">
+                  <h3 className="text-sm font-semibold">Allowed File Types</h3>
+                  <div className="space-y-2">
+                    <Label htmlFor="allowed-file-types">
+                      MIME Types (comma-separated)
+                    </Label>
+                    <Input
+                      id="allowed-file-types"
+                      placeholder="image/jpeg, image/png, application/pdf"
+                      defaultValue={editingModel.allowedFileTypes?.join(", ") || ""}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Examples: image/jpeg, image/png, image/webp, application/pdf, text/plain
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* Tool Prompts */}
+              <div className="space-y-4">
+                <h3 className="text-sm font-semibold">Tool Prompts (Optional)</h3>
+                <p className="text-xs text-muted-foreground">
+                  Custom instructions added to the system prompt when each capability is enabled
+                </p>
+
+                <Accordion type="multiple" className="w-full">
+                  {/* Base System Prompt - Always shown */}
+                  <AccordionItem value="base-prompt">
+                    <AccordionTrigger className="text-sm">Base System Prompt</AccordionTrigger>
+                    <AccordionContent>
+                      <div className="space-y-2">
+                        <Label htmlFor="prompt-base">Base Instructions</Label>
+                        <Textarea
+                          id="prompt-base"
+                          placeholder="You are a helpful assistant..."
+                          defaultValue={editingModel.toolPrompts?.base || ""}
+                          rows={3}
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Base system prompt for this model (overrides default)
+                        </p>
+                      </div>
+                    </AccordionContent>
+                  </AccordionItem>
+
+                  {/* Thinking Prompt */}
+                  {capThinking && (
+                    <AccordionItem value="thinking-prompt">
+                      <AccordionTrigger className="text-sm">Thinking Prompt</AccordionTrigger>
+                      <AccordionContent>
+                        <Textarea
+                          id="prompt-thinking"
+                          placeholder="You have access to extended thinking capabilities..."
+                          defaultValue={editingModel.toolPrompts?.thinking || ""}
+                          rows={3}
+                        />
+                      </AccordionContent>
+                    </AccordionItem>
+                  )}
+
+                  {/* File Input Prompt */}
+                  {capFileInputs && (
+                    <AccordionItem value="file-input-prompt">
+                      <AccordionTrigger className="text-sm">File Input Prompt</AccordionTrigger>
+                      <AccordionContent>
+                        <Textarea
+                          id="prompt-file-input"
+                          placeholder="Users can upload files for you to analyze..."
+                          defaultValue={editingModel.toolPrompts?.fileInput || ""}
+                          rows={3}
+                        />
+                      </AccordionContent>
+                    </AccordionItem>
+                  )}
+
+                  {/* Code Execution Prompt */}
+                  {capCodeExecution && (
+                    <AccordionItem value="code-execution-prompt">
+                      <AccordionTrigger className="text-sm">Code Execution Prompt</AccordionTrigger>
+                      <AccordionContent>
+                        <Textarea
+                          id="prompt-code-execution"
+                          placeholder="You have access to a Python code execution environment..."
+                          defaultValue={editingModel.toolPrompts?.codeExecution || ""}
+                          rows={3}
+                        />
+                      </AccordionContent>
+                    </AccordionItem>
+                  )}
+
+                  {/* Web Search Prompt */}
+                  {capWebSearch && (
+                    <AccordionItem value="web-search-prompt">
+                      <AccordionTrigger className="text-sm">Web Search Prompt</AccordionTrigger>
+                      <AccordionContent>
+                        <Textarea
+                          id="prompt-web-search"
+                          placeholder="You can search the web for current information..."
+                          defaultValue={editingModel.toolPrompts?.webSearch || ""}
+                          rows={3}
+                        />
+                      </AccordionContent>
+                    </AccordionItem>
+                  )}
+
+                  {/* Image Generation Prompt */}
+                  {capImageGeneration && (
+                    <AccordionItem value="image-generation-prompt">
+                      <AccordionTrigger className="text-sm">Image Generation Prompt</AccordionTrigger>
+                      <AccordionContent>
+                        <Textarea
+                          id="prompt-image-generation"
+                          placeholder="You can generate images from text descriptions..."
+                          defaultValue={editingModel.toolPrompts?.imageGeneration || ""}
+                          rows={3}
+                        />
+                      </AccordionContent>
+                    </AccordionItem>
+                  )}
+
+                  {/* URL Context Prompt */}
+                  {capUrlContext && (
+                    <AccordionItem value="url-context-prompt">
+                      <AccordionTrigger className="text-sm">URL Context Prompt</AccordionTrigger>
+                      <AccordionContent>
+                        <Textarea
+                          id="prompt-url-context"
+                          placeholder="You can analyze content from specific URLs..."
+                          defaultValue={editingModel.toolPrompts?.urlContext || ""}
+                          rows={3}
+                        />
+                      </AccordionContent>
+                    </AccordionItem>
+                  )}
+                </Accordion>
+              </div>
+
+              {/* Provider-Specific Config */}
+              {editingModel.provider === "openai" && editingModel.modelId.startsWith("o") && (
+                <div className="space-y-4">
+                  <h3 className="text-sm font-semibold">OpenAI Configuration</h3>
+                  <div className="space-y-2">
+                    <Label>Reasoning Effort</Label>
+                    <select
+                      id="reasoning-effort"
+                      defaultValue={editingModel.providerConfig?.reasoningEffort || "medium"}
+                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    >
+                      <option value="minimal">Minimal</option>
+                      <option value="low">Low</option>
+                      <option value="medium">Medium</option>
+                      <option value="high">High</option>
+                    </select>
+                  </div>
+                </div>
+              )}
+
+              {/* Google Safety Settings */}
+              {editingModel.provider === "google" && (
+                <div className="space-y-4">
+                  <h3 className="text-sm font-semibold">Google Safety Settings</h3>
+                  <p className="text-xs text-muted-foreground">
+                    Configure content safety thresholds for Gemini models
+                  </p>
+                  <div className="space-y-3">
+                    <div className="space-y-2">
+                      <Label htmlFor="safety-hate">Hate Speech</Label>
+                      <select
+                        id="safety-hate"
+                        defaultValue={editingModel.providerConfig?.safetySettings?.hate || "BLOCK_MEDIUM_AND_ABOVE"}
+                        className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                      >
+                        <option value="BLOCK_NONE">Block None</option>
+                        <option value="BLOCK_LOW_AND_ABOVE">Block Low and Above</option>
+                        <option value="BLOCK_MEDIUM_AND_ABOVE">Block Medium and Above</option>
+                        <option value="BLOCK_ONLY_HIGH">Block Only High</option>
+                      </select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="safety-dangerous">Dangerous Content</Label>
+                      <select
+                        id="safety-dangerous"
+                        defaultValue={editingModel.providerConfig?.safetySettings?.dangerous || "BLOCK_MEDIUM_AND_ABOVE"}
+                        className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                      >
+                        <option value="BLOCK_NONE">Block None</option>
+                        <option value="BLOCK_LOW_AND_ABOVE">Block Low and Above</option>
+                        <option value="BLOCK_MEDIUM_AND_ABOVE">Block Medium and Above</option>
+                        <option value="BLOCK_ONLY_HIGH">Block Only High</option>
+                      </select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="safety-harassment">Harassment</Label>
+                      <select
+                        id="safety-harassment"
+                        defaultValue={editingModel.providerConfig?.safetySettings?.harassment || "BLOCK_MEDIUM_AND_ABOVE"}
+                        className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                      >
+                        <option value="BLOCK_NONE">Block None</option>
+                        <option value="BLOCK_LOW_AND_ABOVE">Block Low and Above</option>
+                        <option value="BLOCK_MEDIUM_AND_ABOVE">Block Medium and Above</option>
+                        <option value="BLOCK_ONLY_HIGH">Block Only High</option>
+                      </select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="safety-explicit">Sexually Explicit</Label>
+                      <select
+                        id="safety-explicit"
+                        defaultValue={editingModel.providerConfig?.safetySettings?.explicit || "BLOCK_MEDIUM_AND_ABOVE"}
+                        className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                      >
+                        <option value="BLOCK_NONE">Block None</option>
+                        <option value="BLOCK_LOW_AND_ABOVE">Block Low and Above</option>
+                        <option value="BLOCK_MEDIUM_AND_ABOVE">Block Medium and Above</option>
+                        <option value="BLOCK_ONLY_HIGH">Block Only High</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditingModel(null)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                if (!editingModel) return;
+
+                const inputCost = parseFloat(
+                  (document.getElementById("input-cost") as HTMLInputElement)?.value || "0"
+                );
+                const outputCost = parseFloat(
+                  (document.getElementById("output-cost") as HTMLInputElement)?.value || "0"
+                );
+
+                const thinkingBudget = parseInt(
+                  (document.getElementById("thinking-budget") as HTMLInputElement)?.value || "8192"
+                );
+
+                const capabilities: ModelCapabilities = {
+                  thinking: capThinking ? { enabled: true, budgetTokens: thinkingBudget } : { enabled: false },
+                  fileInputs: { enabled: capFileInputs },
+                  codeExecution: { enabled: capCodeExecution },
+                  webSearch: { enabled: capWebSearch },
+                  imageGeneration: { enabled: capImageGeneration },
+                  urlContext: { enabled: capUrlContext },
+                };
+
+                // Collect allowed file types
+                const allowedFileTypesInput = (document.getElementById("allowed-file-types") as HTMLInputElement)?.value;
+                const allowedFileTypes = allowedFileTypesInput
+                  ? allowedFileTypesInput.split(",").map(t => t.trim()).filter(Boolean)
+                  : [];
+
+                // Collect tool prompts
+                const toolPrompts = {
+                  base: (document.getElementById("prompt-base") as HTMLTextAreaElement)?.value || undefined,
+                  thinking: (document.getElementById("prompt-thinking") as HTMLTextAreaElement)?.value || undefined,
+                  fileInput: (document.getElementById("prompt-file-input") as HTMLTextAreaElement)?.value || undefined,
+                  codeExecution: (document.getElementById("prompt-code-execution") as HTMLTextAreaElement)?.value || undefined,
+                  webSearch: (document.getElementById("prompt-web-search") as HTMLTextAreaElement)?.value || undefined,
+                  imageGeneration: (document.getElementById("prompt-image-generation") as HTMLTextAreaElement)?.value || undefined,
+                  urlContext: (document.getElementById("prompt-url-context") as HTMLTextAreaElement)?.value || undefined,
+                };
+
+                let providerConfig: ProviderConfig | null = editingModel.providerConfig || null;
+                if (editingModel.provider === "openai" && editingModel.modelId.startsWith("o")) {
+                  const reasoningEffort = (document.getElementById("reasoning-effort") as HTMLSelectElement)?.value as "minimal" | "low" | "medium" | "high";
+                  providerConfig = { reasoningEffort };
+                } else if (editingModel.provider === "google") {
+                  const safetyHate = (document.getElementById("safety-hate") as HTMLSelectElement)?.value as "BLOCK_NONE" | "BLOCK_LOW_AND_ABOVE" | "BLOCK_MEDIUM_AND_ABOVE" | "BLOCK_ONLY_HIGH";
+                  const safetyDangerous = (document.getElementById("safety-dangerous") as HTMLSelectElement)?.value as "BLOCK_NONE" | "BLOCK_LOW_AND_ABOVE" | "BLOCK_MEDIUM_AND_ABOVE" | "BLOCK_ONLY_HIGH";
+                  const safetyHarassment = (document.getElementById("safety-harassment") as HTMLSelectElement)?.value as "BLOCK_NONE" | "BLOCK_LOW_AND_ABOVE" | "BLOCK_MEDIUM_AND_ABOVE" | "BLOCK_ONLY_HIGH";
+                  const safetyExplicit = (document.getElementById("safety-explicit") as HTMLSelectElement)?.value as "BLOCK_NONE" | "BLOCK_LOW_AND_ABOVE" | "BLOCK_MEDIUM_AND_ABOVE" | "BLOCK_ONLY_HIGH";
+                  providerConfig = {
+                    safetySettings: {
+                      hate: safetyHate,
+                      dangerous: safetyDangerous,
+                      harassment: safetyHarassment,
+                      explicit: safetyExplicit,
+                    },
+                  };
+                }
+
+                handleEditModel({
+                  pricing: {
+                    inputPerMillion: inputCost,
+                    outputPerMillion: outputCost,
+                    currency: "USD",
+                  },
+                  capabilities,
+                  providerConfig,
+                  allowedFileTypes,
+                  toolPrompts,
+                });
+              }}
+            >
+              Save Changes
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}

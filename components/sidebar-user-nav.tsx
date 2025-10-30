@@ -7,6 +7,7 @@ import type { User } from "@supabase/supabase-js";
 import { useTheme } from "next-themes";
 import { logout } from "@/app/(auth)/actions";
 import { useUser } from "@/hooks/use-user";
+import { isAdmin } from "@/lib/supabase/admin";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -78,6 +79,22 @@ export function SidebarUserNav({ user: propUser }: { user: User | undefined }) {
             >
               Settings
             </DropdownMenuItem>
+            <DropdownMenuItem
+              className="cursor-pointer"
+              data-testid="user-nav-item-usage"
+              onSelect={() => router.push("/usage")}
+            >
+              Usage
+            </DropdownMenuItem>
+            {isAdmin(currentUser) && (
+              <DropdownMenuItem
+                className="cursor-pointer"
+                data-testid="user-nav-item-admin"
+                onSelect={() => router.push("/admin")}
+              >
+                Model & Pricing
+              </DropdownMenuItem>
+            )}
             <DropdownMenuItem
               className="cursor-pointer"
               data-testid="user-nav-item-theme"

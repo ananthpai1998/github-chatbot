@@ -64,6 +64,41 @@
       "when": 1761365693110,
       "tag": "0008_round_thundra",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1761422396830,
+      "tag": "0009_swift_landau",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1761494040706,
+      "tag": "0010_noisy_power_pack",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1761614299803,
+      "tag": "0011_confused_nehzno",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1761668264158,
+      "tag": "0012_common_risque",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1761799973432,
+      "tag": "0013_freezing_freak",
+      "breakpoints": true
     }
   ]
 }

@@ -1,0 +1,243 @@
+"use client";
+
+import { useState } from "react";
+import { Button } from "@/components/ui/button";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
+import { GithubIcon } from "./icons";
+import { useGitHubToken } from "@/hooks/use-github-token";
+
+// Mock data - replace with actual GitHub API calls
+const MOCK_OWNERS = [
+  "facebook",
+  "google",
+  "microsoft",
+  "vercel",
+  "anthropics",
+  "openai",
+];
+
+const MOCK_REPOS: Record<string, string[]> = {
+  facebook: ["react", "react-native", "jest", "metro"],
+  google: ["material-design-icons", "go", "protobuf", "guava"],
+  microsoft: ["vscode", "TypeScript", "playwright", "terminal"],
+  vercel: ["next.js", "turbo", "swr", "ai"],
+  anthropics: ["anthropic-sdk-typescript", "courses"],
+  openai: ["openai-python", "openai-cookbook", "gpt-4"],
+};
+
+const MOCK_BRANCHES = ["main", "master", "develop", "staging", "production"];
+
+export function GitHubContextSelector() {
+  const { getToken, isLoaded } = useGitHubToken();
+  const hasToken = !!getToken();
+
+  const [owner, setOwner] = useState<string>("");
+  const [selectedRepos, setSelectedRepos] = useState<string[]>([]);
+  const [branch, setBranch] = useState("main");
+  const [isOpen, setIsOpen] = useState(false);
+
+  // Get available repos based on selected owner
+  const availableRepos = owner ? MOCK_REPOS[owner] || [] : [];
+
+  const handleRepoToggle = (repo: string) => {
+    setSelectedRepos((prev) =>
+      prev.includes(repo) ? prev.filter((r) => r !== repo) : [...prev, repo]
+    );
+  };
+
+  const handleClear = () => {
+    setOwner("");
+    setSelectedRepos([]);
+    setBranch("main");
+  };
+
+  const handleApply = () => {
+    if (owner && selectedRepos.length > 0) {
+      console.log("GitHub Context Applied:", {
+        owner,
+        repos: selectedRepos,
+        branch,
+      });
+      // TODO: Store context and use in chat
+      setIsOpen(false);
+    }
+  };
+
+  // Always show the button, but change behavior based on token
+  if (!isLoaded) {
+    return null; // Don't render until we know if token exists (prevents SSR issues)
+  }
+
+  return (
+    <Popover open={isOpen} onOpenChange={setIsOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          className="aspect-square h-8 rounded-lg p-1 transition-colors hover:bg-accent"
+          variant="ghost"
+          data-testid="github-context-button"
+          title="GitHub Context"
+        >
+          <GithubIcon size={16} />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-80" align="start" side="top">
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <h4 className="font-medium text-sm">GitHub Context</h4>
+            <p className="text-xs text-muted-foreground">
+              Select owner, repositories, and branch for context
+            </p>
+          </div>
+
+          {!hasToken ? (
+            <div className="space-y-3">
+              <div className="rounded-md border border-yellow-500/50 bg-yellow-500/10 p-3">
+                <p className="text-sm font-medium text-yellow-600 dark:text-yellow-400">
+                  GitHub Token Required
+                </p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Please configure your GitHub Personal Access Token in Settings
+                  to use this feature.
+                </p>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                className="w-full"
+                onClick={() => {
+                  window.location.href = "/settings";
+                }}
+              >
+                Go to Settings
+              </Button>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {/* Owner Selection (Single Select) */}
+              <div className="space-y-2">
+                <Label htmlFor="owner" className="text-xs">
+                  Owner <span className="text-muted-foreground">(single select)</span>
+                </Label>
+                <Select value={owner} onValueChange={(value) => {
+                  setOwner(value);
+                  setSelectedRepos([]); // Reset repos when owner changes
+                }}>
+                  <SelectTrigger className="h-8 text-sm">
+                    <SelectValue placeholder="Select owner..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {MOCK_OWNERS.map((ownerName) => (
+                      <SelectItem key={ownerName} value={ownerName}>
+                        {ownerName}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Repository Selection (Multi Select) */}
+              <div className="space-y-2">
+                <Label className="text-xs">
+                  Repositories <span className="text-muted-foreground">(multi select)</span>
+                </Label>
+                <div className="rounded-md border border-input bg-background">
+                  {!owner ? (
+                    <div className="p-3 text-xs text-muted-foreground">
+                      Select an owner first
+                    </div>
+                  ) : availableRepos.length === 0 ? (
+                    <div className="p-3 text-xs text-muted-foreground">
+                      No repositories found
+                    </div>
+                  ) : (
+                    <div className="max-h-32 overflow-y-auto p-2 space-y-2">
+                      {availableRepos.map((repo) => (
+                        <div key={repo} className="flex items-center space-x-2">
+                          <Checkbox
+                            id={`repo-${repo}`}
+                            checked={selectedRepos.includes(repo)}
+                            onCheckedChange={() => handleRepoToggle(repo)}
+                          />
+                          <label
+                            htmlFor={`repo-${repo}`}
+                            className="text-sm cursor-pointer flex-1"
+                          >
+                            {repo}
+                          </label>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                {selectedRepos.length > 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    Selected: {selectedRepos.length} repo{selectedRepos.length > 1 ? "s" : ""}
+                  </p>
+                )}
+              </div>
+
+              {/* Branch Selection (Single Select) */}
+              <div className="space-y-2">
+                <Label htmlFor="branch" className="text-xs">
+                  Branch <span className="text-muted-foreground">(single select)</span>
+                </Label>
+                <Select value={branch} onValueChange={setBranch}>
+                  <SelectTrigger className="h-8 text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {MOCK_BRANCHES.map((branchName) => (
+                      <SelectItem key={branchName} value={branchName}>
+                        {branchName}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="flex justify-between">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleClear}
+                className="h-7 text-xs"
+              >
+                Clear
+              </Button>
+              <Button
+                size="sm"
+                onClick={handleApply}
+                disabled={!owner || selectedRepos.length === 0}
+                className="h-7 text-xs"
+              >
+                Apply
+              </Button>
+            </div>
+
+            <div className="rounded-md bg-muted p-2">
+              <p className="text-xs text-muted-foreground">
+                <strong>Note:</strong> This will add context from selected repositories
+                to help the AI understand your codebase. Real GitHub API integration
+                coming soon.
+              </p>
+            </div>
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}

@@ -45,6 +45,8 @@ import { PreviewAttachment } from "./preview-attachment";
 import { SuggestedActions } from "./suggested-actions";
 import { Button } from "./ui/button";
 import type { VisibilityType } from "./visibility-selector";
+import { GitHubContextSelector } from "./github-context-selector";
+import { ThinkingToggle } from "./thinking-toggle";
 
 function PureMultimodalInput({
   chatId,
@@ -105,6 +107,44 @@ function PureMultimodalInput({
   const [localStorageInput, setLocalStorageInput] = useLocalStorage(
     "input",
     ""
+  );
+
+  // State for model capabilities (thinking support)
+  const [modelCapabilities, setModelCapabilities] = useState<any>(null);
+
+  // Fetch model capabilities when selected model changes
+  useEffect(() => {
+    const fetchModelCapabilities = async () => {
+      try {
+        const response = await fetch("/api/models/enabled");
+        if (response.ok) {
+          const data = await response.json();
+          const model = data.models.find((m: any) => m.id === selectedModelId);
+          console.log("[MultimodalInput] Model found:", model);
+          console.log("[MultimodalInput] Capabilities:", model?.capabilities);
+          setModelCapabilities(model?.capabilities || null);
+        }
+      } catch (error) {
+        console.error("Failed to fetch model capabilities:", error);
+      }
+    };
+
+    if (selectedModelId) {
+      fetchModelCapabilities();
+    }
+  }, [selectedModelId]);
+
+  // Handler for thinking toggle
+  const handleThinkingToggle = useCallback(
+    (enabled: boolean) => {
+      // If chat has messages, we need to start a new chat
+      if (messages.length > 0) {
+        // Reload page to start fresh chat with new thinking preference
+        window.location.href = "/";
+      }
+      // If no messages, thinking preference is already saved, just continue
+    },
+    [messages.length]
   );
 
   useEffect(() => {
@@ -172,6 +212,7 @@ function PureMultimodalInput({
   const uploadFile = useCallback(async (file: File) => {
     const formData = new FormData();
     formData.append("file", file);
+    formData.append("modelId", selectedModelId); // Add modelId for validation
 
     try {
       const response = await fetch("/api/files/upload", {
@@ -194,7 +235,7 @@ function PureMultimodalInput({
     } catch (_error) {
       toast.error("Failed to upload file, please try again!");
     }
-  }, []);
+  }, [selectedModelId]);
 
   const contextProps = useMemo(
     () => ({
@@ -248,6 +289,7 @@ function PureMultimodalInput({
         ref={fileInputRef}
         tabIndex={-1}
         type="file"
+        accept={modelCapabilities?.fileInputs?.enabled ? "*/*" : "image/*"}
       />
 
       <PromptInput
@@ -318,6 +360,14 @@ function PureMultimodalInput({
               selectedModelId={selectedModelId}
               status={status}
               isDisabled={isDisabled}
+              modelCapabilities={modelCapabilities}
+            />
+            <GitHubContextSelector />
+            <ThinkingToggle
+              modelId={selectedModelId}
+              isThinkingEnabledForModel={modelCapabilities?.thinking?.enabled ?? false}
+              currentChatHasMessages={messages.length > 0}
+              onToggle={handleThinkingToggle}
             />
             <ModelSelectorCompact
               onModelChange={onModelChange}
@@ -373,24 +423,28 @@ function PureAttachmentsButton({
   status,
   selectedModelId,
   isDisabled = false,
+  modelCapabilities,
 }: {
   fileInputRef: React.MutableRefObject<HTMLInputElement | null>;
   status: UseChatHelpers<ChatMessage>["status"];
   selectedModelId: string;
   isDisabled?: boolean;
+  modelCapabilities?: any;
 }) {
   const isReasoningModel = selectedModelId === "chat-model-reasoning";
+  const fileInputsEnabled = modelCapabilities?.fileInputs?.enabled ?? true; // Default to true for backward compatibility
 
   return (
     <Button
       className="aspect-square h-8 rounded-lg p-1 transition-colors hover:bg-accent"
       data-testid="attachments-button"
-      disabled={status !== "ready" || isReasoningModel || isDisabled}
+      disabled={status !== "ready" || isReasoningModel || isDisabled || !fileInputsEnabled}
       onClick={(event) => {
         event.preventDefault();
         fileInputRef.current?.click();
       }}
       variant="ghost"
+      title={!fileInputsEnabled ? "File uploads not supported for this model" : "Attach files"}
     >
       <PaperclipIcon size={14} style={{ width: 14, height: 14 }} />
     </Button>
@@ -407,19 +461,79 @@ function PureModelSelectorCompact({
   onModelChange?: (modelId: string) => void;
 }) {
   const [optimisticModelId, setOptimisticModelId] = useState(selectedModelId);
+  const [availableModels, setAvailableModels] = useState(chatModels);
+
+  // Fetch enabled models - called on mount and when dropdown opens
+  const fetchEnabledModels = async () => {
+    try {
+      const response = await fetch("/api/models/enabled", {
+        cache: "no-store", // Always fetch fresh data
+      });
+      if (response.ok) {
+        const data = await response.json();
+        if (data.models && data.models.length > 0) {
+          setAvailableModels(data.models);
+
+          // Check if currently selected model is still available
+          const currentModelAvailable = data.models.some(
+            (m: any) => m.id === optimisticModelId
+          );
+
+          // If selected model is not available, switch to first available model
+          if (!currentModelAvailable && data.models.length > 0) {
+            const newModel = data.models[0];
+            setOptimisticModelId(newModel.id);
+            onModelChange?.(newModel.id);
+            startTransition(() => {
+              saveChatModelAsCookie(newModel.id);
+            });
+          }
+        } else {
+          // Fallback to static models if no enabled models
+          setAvailableModels(chatModels);
+        }
+      }
+    } catch (error) {
+      console.error("Failed to fetch enabled models:", error);
+      // Fallback to static models on error
+      setAvailableModels(chatModels);
+    }
+  };
+
+  // Fetch on mount
+  useEffect(() => {
+    fetchEnabledModels();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Validate selected model periodically (every 10 seconds)
+  useEffect(() => {
+    const interval = setInterval(() => {
+      fetchEnabledModels();
+    }, 10000);
+
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [optimisticModelId]);
 
   useEffect(() => {
     setOptimisticModelId(selectedModelId);
   }, [selectedModelId]);
 
-  const selectedModel = chatModels.find(
+  const selectedModel = availableModels.find(
     (model) => model.id === optimisticModelId
   );
 
   return (
     <PromptInputModelSelect
+      onOpenChange={(open) => {
+        // Fetch fresh list when dropdown opens
+        if (open) {
+          fetchEnabledModels();
+        }
+      }}
       onValueChange={(modelName) => {
-        const model = chatModels.find((m) => m.name === modelName);
+        const model = availableModels.find((m) => m.name === modelName);
         if (model) {
           setOptimisticModelId(model.id);
           onModelChange?.(model.id);
@@ -442,7 +556,7 @@ function PureModelSelectorCompact({
       </Trigger>
       <PromptInputModelSelectContent className="min-w-[260px] p-0">
         <div className="flex flex-col gap-px">
-          {chatModels.map((model) => (
+          {availableModels.map((model) => (
             <SelectItem key={model.id} value={model.name}>
               <div className="truncate font-medium text-xs">{model.name}</div>
               <div className="mt-px truncate text-[10px] text-muted-foreground leading-tight">
